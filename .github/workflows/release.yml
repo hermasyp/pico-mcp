@@ -1,10 +1,12 @@
 name: Release
 
-# Push a tag such as v1.0.0 (the same version as package.json). The workflow checks, builds and packs,
-# attaches the tarball and the single-file connector to a GitHub Release, and publishes to npm when the
-# repository has an NPM_TOKEN secret.
+# Run it from the Actions tab (Run workflow, on main) once the version in package.json and CHANGELOG.md are
+# the ones to release, or push a tag such as v1.0.0 that is that version. The workflow checks, builds and
+# packs, attaches the tarball and the single-file connector to a GitHub Release (creating the tag when it
+# does not exist), and publishes to npm when the repository has an NPM_TOKEN secret.
 
 on:
+  workflow_dispatch:
   push:
     tags: ['v*.*.*']
 
@@ -17,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,8 +33,23 @@ jobs:
         run: npm install --global npm@11
       - name: Install dependencies
         run: npm ci
-      - name: The tag must be the version in package.json
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - name: Which version
+        id: version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: A pushed tag must be the version in package.json
+        if: github.ref_type == 'tag'
+        run: test "${{ steps.version.outputs.tag }}" = "$GITHUB_REF_NAME"
+      - name: A manual release must run on main and must not repeat a version
+        if: github.ref_type != 'tag'
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          if gh release view "${{ steps.version.outputs.tag }}" > /dev/null 2>&1; then
+            echo "A release ${{ steps.version.outputs.tag }} exists already. Raise the version in package.json and CHANGELOG.md first."
+            exit 1
+          fi
       - name: Verify (type-check, tests, build)
         run: npm run verify
       - name: Pack
@@ -41,11 +59,9 @@ jobs:
           cp dist/pico-mcp.mjs pico-mcp.mjs
           cp dist/THIRD_PARTY_LICENSES.txt THIRD_PARTY_LICENSES.txt
           sha256sum pico-mcp-*.tgz pico-mcp.mjs THIRD_PARTY_LICENSES.txt > SHA256SUMS
-          node scripts/changelog-section.mjs "${GITHUB_REF_NAME#v}" > release-notes.md
+          node scripts/changelog-section.mjs "${{ steps.version.outputs.version }}" > release-notes.md
       - name: GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" pico-mcp-*.tgz pico-mcp.mjs THIRD_PARTY_LICENSES.txt SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+        run: gh release create "${{ steps.version.outputs.tag }}" pico-mcp-*.tgz pico-mcp.mjs THIRD_PARTY_LICENSES.txt SHA256SUMS --title "${{ steps.version.outputs.tag }}" --notes-file release-notes.md --target "$GITHUB_SHA"
       - name: Publish to npm
         if: env.NPM_TOKEN != ''
         env:
