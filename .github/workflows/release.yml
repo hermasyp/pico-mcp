@@ -1,0 +1,53 @@
+name: Release
+
+# Push a tag such as v1.0.0 (the same version as package.json). The workflow checks, builds and packs,
+# attaches the tarball and the single-file connector to a GitHub Release, and publishes to npm when the
+# repository has an NPM_TOKEN secret.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: Use a current npm
+        run: npm install --global npm@11
+      - name: Install dependencies
+        run: npm ci
+      - name: The tag must be the version in package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - name: Verify (type-check, tests, build)
+        run: npm run verify
+      - name: Pack
+        run: |
+          npm pack
+          node scripts/smoke-pack.mjs pico-mcp-*.tgz
+          cp dist/pico-mcp.mjs pico-mcp.mjs
+          cp dist/THIRD_PARTY_LICENSES.txt THIRD_PARTY_LICENSES.txt
+          sha256sum pico-mcp-*.tgz pico-mcp.mjs THIRD_PARTY_LICENSES.txt > SHA256SUMS
+          node scripts/changelog-section.mjs "${GITHUB_REF_NAME#v}" > release-notes.md
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" pico-mcp-*.tgz pico-mcp.mjs THIRD_PARTY_LICENSES.txt SHA256SUMS --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public

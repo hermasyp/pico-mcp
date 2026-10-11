@@ -1,0 +1,71 @@
+{
+  "name": "pico-mcp",
+  "version": "1.0.0",
+  "description": "MCP server that lets an AI agent (Claude Code, Claude Desktop, Cursor) read and edit API contracts in Pico. It runs on your machine and the Pico tab connects to it over a local WebSocket.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "pico",
+    "api-contract",
+    "openapi",
+    "claude",
+    "cursor"
+  ],
+  "license": "MIT",
+  "author": "Muhammad Hermas Yuda Pamungkas (https://github.com/hermasyp)",
+  "homepage": "https://github.com/hermasyp/pico-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hermasyp/pico-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hermasyp/pico-mcp/issues"
+  },
+  "type": "module",
+  "bin": {
+    "pico-mcp": "dist/pico-mcp.mjs"
+  },
+  "exports": {
+    "./protocol": {
+      "types": "./dist/lib/protocol.d.ts",
+      "default": "./dist/lib/protocol.js"
+    },
+    "./catalog": {
+      "types": "./dist/lib/catalog.d.ts",
+      "default": "./dist/lib/catalog.js"
+    },
+    "./vocabulary": {
+      "types": "./dist/lib/vocabulary.d.ts",
+      "default": "./dist/lib/vocabulary.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "tsc",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "verify": "npm run check && npm test && npm run build",
+    "prepack": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "@types/node": "24.13.3",
+    "@types/ws": "8.18.2",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10",
+    "ws": "8.22.0"
+  }
+}
