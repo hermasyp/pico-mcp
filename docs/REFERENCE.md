@@ -245,10 +245,13 @@ files. Tests read the sources to make sure.
 Describe it, list it in the table above (a test fails until this file names every tool, prompt, option, error
 code, limit and default), and release both. A Pico that does not have the tool yet answers `unknown-tool`.
 
-**Releasing.** Update `CHANGELOG.md` and the version in `package.json`, then push a tag such as `v1.0.1`. The
-release workflow checks that the tag is the version, verifies, builds, attaches the tarball, the single-file
-connector and the licences of what it bundles to a GitHub Release, and publishes to npm when the repository
-has an `NPM_TOKEN` secret.
+**Releasing.** Update `CHANGELOG.md` and the version in `package.json`, then either push a tag such as `v1.0.1`
+or start the *Release* workflow by hand from the Actions tab, on `main`. A pushed tag must be the version in
+`package.json`; a manual run reads the version from there, refuses to repeat a release that exists, and creates
+the tag itself. Either way the workflow verifies, builds, attaches the tarball, the single-file connector, the
+licences of what it bundles and `SHA256SUMS` to a GitHub Release, and publishes to npm when the repository has
+an `NPM_TOKEN` secret. Pico installs the tarball of a release from its address, so a release that Pico uses
+must not be deleted or renamed.
 
 ## Verification
 
