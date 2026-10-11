@@ -4,7 +4,8 @@ import { BODY_TYPES, FIELD_TYPES, HTTP_METHODS } from './vocabulary'
 /*
  * What an agent is told about Pico: the tools and their input schemas, the
  * prompts (recipes), the server instructions and the format guide. Data and text
- * only, so the connector can publish it and the tab can be tested against it.
+ * only, so the connector can publish it and the tab can be tested against it
+ * (Pico's web app imports this as `pico-mcp/catalog`).
  *
  * Schemas are plain JSON Schema, kept simple on purpose: no $ref and no union
  * types, because not every agent understands them. Nothing here is trusted by

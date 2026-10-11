@@ -1,7 +1,7 @@
 /*
- * The wire between a Pico tab and the connector (`mcp/`) that an agent talks to.
- * Pure: no DOM, no Svelte, no Node. Both sides import it, so they cannot drift
- * apart on what a pairing code, a limit or a frame looks like.
+ * The wire between a Pico tab and the connector (`src/connector/`) that an agent talks to.
+ * Pure: no DOM, no Svelte, no Node. Both sides import it (Pico's web app as `pico-mcp/protocol`),
+ * so they cannot drift apart on what a pairing code, a limit or a frame looks like.
  *
  * The tab connects out to the connector's WebSocket on 127.0.0.1. They prove to
  * each other that they know the one-time token without ever sending it (see
