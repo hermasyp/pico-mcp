@@ -250,8 +250,10 @@ or start the *Release* workflow by hand from the Actions tab, on `main`. A pushe
 `package.json`; a manual run reads the version from there, refuses to repeat a release that exists, and creates
 the tag itself. Either way the workflow verifies, builds, attaches the tarball, the single-file connector, the
 licences of what it bundles and `SHA256SUMS` to a GitHub Release, and publishes to npm when the repository has
-an `NPM_TOKEN` secret. Pico installs the tarball of a release from its address, so a release that Pico uses
-must not be deleted or renamed.
+an `NPM_TOKEN` secret. A version that already has a release cannot be run again, so adding the secret after
+v1.0.0 does not publish v1.0.0: either run `npm publish` once from a clone at that tag, or release the next
+version. Pico installs the tarball of a release from its address, so a release that Pico uses must not be
+deleted or renamed.
 
 ## Verification
 
