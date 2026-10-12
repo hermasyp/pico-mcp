@@ -10,7 +10,12 @@ Let an AI agent such as **Claude Code, Claude Desktop or Cursor** read and edit 
 - turn **existing code** (routes, DTOs, annotations) into endpoints, or write OpenAPI and import it;
 - **edit the contract you have open**: "fix this endpoint", "add the error responses", "rename these";
 - read the contract back (as OpenAPI, Markdown, a Pico file, or example payloads) to write tests,
-  fixtures and client types.
+  fixtures and client types;
+- **review** the contract (endpoints that never say how they fail, repeated routes, names written in two
+  styles…) and **compare** it with an OpenAPI document that the code generates, to see where the two have
+  drifted apart;
+- **change many endpoints at once**: "add the 401 and 500 responses to every endpoint", "rename `user_id` to
+  `userId` everywhere", in one step with one Undo.
 
 Everything it does appears in front of you at once, Pico keeps a restore point first, and you can undo it.
 
