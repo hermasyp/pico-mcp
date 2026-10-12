@@ -133,17 +133,33 @@ With `endpointIds` only those endpoints are checked and the checks across the wh
 At most 200 findings are listed, and `counts` covers all of them (`truncated` says when the list is cut short).
 
 `pico_diff_with_openapi` takes the OpenAPI document (3.x or Swagger 2, JSON or YAML, up to 3,000,000
-characters) and reads it the way an import does: local `$ref` references are followed, `allOf` is merged, and
-what cannot be read (a remote reference, a cycle) is named in `notes`. The **project is the baseline**. It
-lists `onlyInPico`, `onlyInOpenApi` and `changed` (per endpoint, with the `where`, the `kind` of change and
-`before` and `after`), with a `summary` that counts everything. A change is marked `breaking` when a caller
-built against the contract would break against the document: for example a new required request field, a request
-field that changed type, a response field that was removed, changed type, may be missing or may be null, an
-endpoint that is gone, or a success response that is gone. That is a rule of thumb about requests and responses,
-not a proof, and each breaking change says why.
-At most 200 endpoints on either side only, 100 changed endpoints and 50 changes in each are listed (`truncated`
-says so); `summary` counts everything. What the document format cannot hold (an enum's values, a file) reads
-back as text on both sides and is not reported as a difference.
+characters) and reads it the way Pico's import reads it: references inside the document (`$ref`) are followed,
+`allOf` is merged, Swagger 2 bodies, form parameters and response schemas are read, and a schema is written out
+only as deep as keeps it within a few hundred to 2,000 properties. What could not be read or followed (a reference
+to another file, a cycle, a schema read less deep, the base path the document says its paths start at) is named
+in `notes`. The **project is the baseline**. The answer lists `onlyInPico`, `onlyInOpenApi` and `changed` (per
+endpoint, with the `where`, the `kind` of change and `before` and `after`), with a `summary` that counts everything.
+A change is marked `breaking` when a caller built against the contract would break against the document: for
+example a new required request field, a request field that changed type, a response field that was removed,
+changed type, may be missing or may be null, an endpoint that is gone, or a success response that is gone. That is
+a rule of thumb about requests and responses, not a proof, and each breaking change says why.
+
+- **What is compared.** Methods and paths, headers, query parameters, request bodies and responses, with their
+  fields (names, types, required, nullable). Header parameters named `Accept`, `Content-Type` and `Authorization`
+  are left out on both sides, because OpenAPI says they are ignored and a framework does not write them. The name
+  of a header is not case sensitive, the name of a query parameter is. An enum's values and a file read back as
+  text on both sides and are not reported.
+- **What is not compared.** A route that stands twice on one side (`/users` and `/users/`, or `/u/{id}` and
+  `/u/{uid}`), a field name twice in one list and a status twice in one endpoint cannot be told from themselves,
+  because the export writes one and the reader keeps one. They are left out and named in `notes`, so a project
+  compared with its own export has no differences.
+- **What is listed.** Endpoints with breaking changes come first, and in an endpoint the breaking changes come
+  first. At most 200 endpoints on either side only, 100 changed endpoints and 50 changes in each are listed, and
+  when the answer would still be longer than an answer may be it is shortened further; `truncated` says so, and
+  `summary` always counts everything.
+
+The review is shortened in the same way when its findings would not fit, keeping the first ones and all the
+counts.
 
 ### Changing many endpoints
 
@@ -151,17 +167,25 @@ back as text on both sides and is not reported as a difference.
 Undo, and if a later op fails nothing changes.
 
 - **`where`** picks the endpoints. Give at least one of `endpointIds`, `folder` (a name or id; empty text means no
-  folder), `method` and `pathPrefix` (`/orders` takes `/orders` and what is below it, not `/orders-archive`);
-  an endpoint must match all that are given, so "everything" is never an accident (`pathPrefix` `/` says it
-  on purpose).
+  folder; a name that several folders have takes all of them, and the answer says so), `method` and `pathPrefix`
+  (`/orders` takes `/orders` and what is below it, not `/orders-archive`); an endpoint must match all that are
+  given, so "everything" is never an accident (`pathPrefix` `/` says it on purpose).
 - **`patch`** says what to do, at least one of `addResponses` (the shape `pico_add_endpoints` takes, each status
-  once), `addHeaders`, `removeHeaders`, `appendDescription`, `renameField` (`from`, `to` and where: `query`,
-  `body`, `responses` or `headers`; without it query, body and responses) and `useCommonHeaders`.
+  once), `addHeaders`, `removeHeaders` (not one that `addHeaders` adds), `appendDescription`, `renameField`
+  (`from`, `to` and where: `query`, `body`, `responses` or `headers`; without it query, body and responses) and
+  `useCommonHeaders`.
 - Each change is **skipped where it is already made**, so repeating the call changes nothing (the answer says
-  `changed: 0`). A rename into a name that is already used beside the field is not done and is reported.
-- **`dryRun`: true** reports what would change, without changing it. The answer lists the first 50 endpoints that
-  would change; `matched` and `changed` count them all. A dry run is still a call of the change tool, so a
-  *Read only* connection refuses it.
+  `changed: 0`). A header counts as there when the endpoint has it or, once the patch is done, the project's
+  headers give it. A note counts as there when the description has it as a paragraph. A header of the project is
+  not taken off an endpoint by `removeHeaders` (the answer warns: turn the project's headers off for the endpoint
+  with `useCommonHeaders`, or change them with `set_common_headers`). A rename into a name that is already used
+  beside the field (or, for a header, one of the project's) is not done and is reported.
+- **A limit on what it adds.** The fields a patch adds are counted for every endpoint that gets them, together
+  with the rest of the call, against the 20,000 fields a call may have; over it, the call is refused before any
+  of it is applied. A dry run counts the same. What the answer lists is short too: the first 50 endpoints that
+  would change, and at most five header or response names for each.
+- **`dryRun`: true** reports what would change, without changing it. `matched` and `changed` count all the
+  endpoints. A dry run is still a call of the change tool, so a *Read only* connection refuses it.
 
 ### Errors
 

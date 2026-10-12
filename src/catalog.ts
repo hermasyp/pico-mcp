@@ -396,7 +396,7 @@ export const AGENT_TOOLS: readonly AgentToolDef[] = [
                 description: 'patch_endpoints: which endpoints. At least one key; an endpoint must match every key given. pathPrefix "/" is all of them.',
                 properties: {
                   endpointIds: ids('These endpoints.'),
-                  folder: text('The endpoints in this folder (name or id); "" means those with no folder.'),
+                  folder: text('The endpoints in this folder (name or id); "" means those with no folder. A name that several folders have takes all of them.'),
                   method: text('The endpoints with this method.', { enum: [...HTTP_METHODS] }),
                   pathPrefix: text('The endpoints whose path is this or below it: "/orders" takes /orders and /orders/{id}, not /orders-archive.'),
                 },
@@ -404,15 +404,15 @@ export const AGENT_TOOLS: readonly AgentToolDef[] = [
               },
               patch: {
                 type: 'object',
-                description: 'patch_endpoints: what to change; at least one key. Each change is skipped for an endpoint that already has it, so repeating the call changes nothing.',
+                description: 'patch_endpoints: what to change; at least one key. Each change is skipped for an endpoint that already has it, so repeating the call changes nothing. The fields it adds count for every endpoint it reaches, against the limit of one call.',
                 properties: {
                   addResponses: { type: 'array', description: 'Responses to add where the status is missing. Same shape as in pico_add_endpoints, each status once.', minItems: 1, maxItems: LIMITS.responsesPerEndpoint, items: responseItem(0) },
                   addHeaders: fields('Headers to add where the endpoint lacks them (any case; the common headers count).', { flat: true, terse: true }),
-                  removeHeaders: { type: 'array', description: 'Names of headers to take off, in any case.', minItems: 1, items: { type: 'string' } },
-                  appendDescription: text('A paragraph added at the end of each description (not again where it is already there).'),
+                  removeHeaders: { type: 'array', description: 'Names of headers to take off, in any case. A header of the project stays on endpoints that use the project’s headers. Not one that addHeaders adds.', minItems: 1, items: { type: 'string' } },
+                  appendDescription: text('A paragraph added at the end of each description, unless the description has it as a paragraph already.'),
                   renameField: {
                     type: 'object',
-                    description: 'Rename a field at every depth, but not into a name already used beside it (that one is reported).',
+                    description: 'Rename a field at every depth, but not into a name already used beside it (that one is reported). Header names are matched in any case.',
                     properties: {
                       from: text('The name it has.'),
                       to: text('The name it gets.'),
