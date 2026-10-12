@@ -17,7 +17,9 @@ unchanged (1), so a connector of this version still works with an older Pico for
   examples) and returns counts and findings, each with a rule, a severity, where, and a fix. Advice only.
 - **`pico_diff_with_openapi`**: compares a project with an OpenAPI document, for example the one the code
   generates. The project is the baseline; it lists what exists on one side only and what differs in the
-  endpoints both have, marking the changes that would break a caller.
+  endpoints both have, marking the changes that would break a caller. It reads the JSON kind of a body when the
+  document offers several, names a body or response that the document writes as a list or a map and does not
+  compare it, and does not call a change of type breaking when it still fits.
 - **`patch_endpoints`**, an op of `pico_apply_ops`: one change to many endpoints, chosen by id, folder, method
   or path. It adds responses and headers, removes headers, appends to descriptions, renames a field at every
   depth and turns the common headers on or off. Each change is skipped where it is already made, so repeating

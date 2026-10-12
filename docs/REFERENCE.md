@@ -112,9 +112,11 @@ nesting, 200,000 characters in one text (an example and a sample count by their 
 characters in a name; an answer longer than 400,000 characters is refused with a hint to ask for less. A frame
 is limited to 4 MiB on the wire, counted in bytes, so a very large call is refused for that call alone
 (`too-large`) and the connection stays up. A document sent to `pico_import_document` may not expand, once its
-YAML aliases and `$ref` references are written out, to more values than it has characters (and at least a
-million): a short file that repeats its parts into billions of fields is refused. The same holds for the
-document of `pico_diff_with_openapi`.
+YAML aliases are written out, to more values than it has characters (and at least a million): a short file
+that repeats its parts that way is refused with `too-large`. What its `$ref` references write out is counted by
+the same budget, but is read less deep, or left out, with a note, and not refused (a document that would take
+far more work to read than any ordinary one does is refused too). The same holds for the document of
+`pico_diff_with_openapi`.
 
 ### Review and comparison
 
@@ -135,14 +137,18 @@ At most 200 findings are listed, and `counts` covers all of them (`truncated` sa
 `pico_diff_with_openapi` takes the OpenAPI document (3.x or Swagger 2, JSON or YAML, up to 3,000,000
 characters) and reads it the way Pico's import reads it: references inside the document (`$ref`) are followed,
 `allOf` is merged, Swagger 2 bodies, form parameters and response schemas are read, and a schema is written out
-only as deep as keeps it within a few hundred to 2,000 properties. What could not be read or followed (a reference
-to another file, a cycle, a schema read less deep, the base path the document says its paths start at) is named
-in `notes`. The **project is the baseline**. The answer lists `onlyInPico`, `onlyInOpenApi` and `changed` (per
+only as deep as keeps it within about 2,000 properties (fewer when many places use references, and what a
+property holds, such as a long text or a list of allowed values, counts too); one that does not fit even on its own
+is left out. What could not be read or followed (a reference to another file, a cycle, a schema read less deep or
+left out, the base path the document says its paths start at) is named in `notes`, quoting a reference in at most
+120 characters. The **project is the baseline**. The answer lists `onlyInPico`, `onlyInOpenApi` and `changed` (per
 endpoint, with the `where`, the `kind` of change and `before` and `after`), with a `summary` that counts everything.
 A change is marked `breaking` when a caller built against the contract would break against the document: for
 example a new required request field, a request field that changed type, a response field that was removed,
 changed type, may be missing or may be null, an endpoint that is gone, or a success response that is gone. That is
-a rule of thumb about requests and responses, not a proof, and each breaking change says why.
+a rule of thumb about requests and responses, not a proof, and each breaking change says why. A change of type
+that still fits is listed but not marked breaking: a request field that now takes a number where it took an
+integer, a response field that now gives an integer where it gave a number.
 
 - **What is compared.** Methods and paths, headers, query parameters, request bodies and responses, with their
   fields (names, types, required, nullable). Header parameters named `Accept`, `Content-Type` and `Authorization`
@@ -150,9 +156,12 @@ a rule of thumb about requests and responses, not a proof, and each breaking cha
   of a header is not case sensitive, the name of a query parameter is. An enum's values and a file read back as
   text on both sides and are not reported.
 - **What is not compared.** A route that stands twice on one side (`/users` and `/users/`, or `/u/{id}` and
-  `/u/{uid}`), a field name twice in one list and a status twice in one endpoint cannot be told from themselves,
-  because the export writes one and the reader keeps one. They are left out and named in `notes`, so a project
-  compared with its own export has no differences.
+  `/u/{uid}`) and that the other side has too, a field name twice in one list and a status twice in one endpoint
+  cannot be told from themselves, because the export writes one and the reader keeps one. They are left out and
+  named in `notes`, so a project compared with its own export has no differences; a route that only one side has
+  is listed as it is, however often it stands. A body or response that the document writes as a list or a map at
+  the top is named in `notes` and not compared, because Pico describes the fields of an object. Where the
+  document offers a body in several kinds, the JSON one is read.
 - **What is listed.** Endpoints with breaking changes come first, and in an endpoint the breaking changes come
   first. At most 200 endpoints on either side only, 100 changed endpoints and 50 changes in each are listed, and
   when the answer would still be longer than an answer may be it is shortened further; `truncated` says so, and
