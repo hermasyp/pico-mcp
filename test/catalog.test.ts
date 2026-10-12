@@ -19,6 +19,8 @@ const NAMES = [
   'pico_get_project',
   'pico_get_examples',
   'pico_export',
+  'pico_review_contract',
+  'pico_diff_with_openapi',
   'pico_create_project',
   'pico_add_endpoints',
   'pico_update_endpoint',
@@ -40,7 +42,7 @@ function walk(schema: Schema, visit: (node: Schema, depth: number) => void, dept
 }
 
 describe('the tool catalog', () => {
-  it('lists the fourteen tools of this release once each, in a stable order', () => {
+  it('lists the sixteen tools of this release once each, in a stable order', () => {
     expect(AGENT_TOOLS.map((tool) => tool.name)).toEqual(NAMES)
     expect(new Set(AGENT_TOOLS.map((tool) => tool.name)).size).toBe(NAMES.length)
     expect(toolByName('pico_status')?.title).toBeTruthy()
@@ -59,7 +61,7 @@ describe('the tool catalog', () => {
 
   it('marks what each tool does to the workspace', () => {
     const access = (name: string) => toolByName(name)?.access
-    for (const name of ['pico_connect', 'pico_format_guide', 'pico_status', 'pico_get_project', 'pico_get_examples', 'pico_export']) {
+    for (const name of ['pico_connect', 'pico_format_guide', 'pico_status', 'pico_get_project', 'pico_get_examples', 'pico_export', 'pico_review_contract', 'pico_diff_with_openapi']) {
       expect(access(name), name).toBe('read')
     }
     expect(access('pico_focus')).toBe('navigate')
@@ -116,6 +118,32 @@ describe('the tool catalog', () => {
     expect((add.inputSchema.properties as Record<string, Schema>).endpoints.maxItems).toBe(LIMITS.endpointsPerCall)
   })
 
+  it('offers a review that takes a project and some endpoints, and a comparison that needs the document', () => {
+    const review = toolByName('pico_review_contract') as AgentToolDef
+    expect(Object.keys(review.inputSchema.properties as Record<string, Schema>)).toEqual(['projectId', 'endpointIds'])
+    expect(review.inputSchema.required).toBeUndefined()
+    const diff = toolByName('pico_diff_with_openapi') as AgentToolDef
+    expect(Object.keys(diff.inputSchema.properties as Record<string, Schema>)).toEqual(['projectId', 'openapi'])
+    expect(diff.inputSchema.required).toEqual(['openapi'])
+  })
+
+  it('spells out patch_endpoints: which endpoints, what to change, and a dry run', () => {
+    const ops = toolByName('pico_apply_ops') as AgentToolDef
+    const item = ((ops.inputSchema.properties as Record<string, Schema>).ops.items as Schema).properties as Record<string, Schema>
+    expect((item.op.enum as string[]).includes('patch_endpoints')).toBe(true)
+    expect(Object.keys(item.where.properties as object)).toEqual(['endpointIds', 'folder', 'method', 'pathPrefix'])
+    expect(Object.keys(item.patch.properties as object)).toEqual(['addResponses', 'addHeaders', 'removeHeaders', 'appendDescription', 'renameField', 'useCommonHeaders'])
+    expect(item.dryRun.type).toBe('boolean')
+    const rename = (item.patch.properties as Record<string, Schema>).renameField
+    expect(rename.required).toEqual(['from', 'to'])
+    expect(((rename.properties as Record<string, Schema>).in.enum as string[]).sort()).toEqual(['body', 'headers', 'query', 'responses'])
+    const methods = (item.where.properties as Record<string, Schema>).method.enum as string[]
+    expect(methods).toEqual([...HTTP_METHODS])
+    // The same response shape as pico_add_endpoints takes, so an agent does not learn two.
+    const added = ((item.patch.properties as Record<string, Schema>).addResponses.items as Schema).properties as Record<string, Schema>
+    expect(Object.keys(added)).toEqual(['status', 'description', 'fields', 'example'])
+  })
+
   it('keeps the whole tool list small enough to sit in an agent’s context', () => {
     const size = JSON.stringify(AGENT_TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))).length
     expect(size).toBeLessThanOrEqual(TOOL_LIST_BUDGET)
@@ -168,6 +196,24 @@ describe('the prompts', () => {
   })
 })
 
+describe('the prompts that review and sync', () => {
+  const text = (name: string) => (AGENT_PROMPTS.find((prompt) => prompt.name === name) as (typeof AGENT_PROMPTS)[number]).text({})
+
+  it('review_contract starts from pico_review_contract and applies repeated fixes in bulk', () => {
+    const review = text('review_contract')
+    expect(review).toContain('pico_review_contract')
+    expect(review).toContain('patch_endpoints')
+    expect(review).toContain('dryRun')
+  })
+
+  it('sync_contract_with_code compares with an OpenAPI document when the code can make one, and by hand when not', () => {
+    const sync = text('sync_contract_with_code')
+    expect(sync).toContain('pico_diff_with_openapi')
+    expect(sync).toMatch(/If there is no document/)
+    expect(sync).toContain('wait for my go-ahead')
+  })
+})
+
 describe('the instructions and the guide', () => {
   it('fit in fifteen lines and carry the rules that matter', () => {
     const lines = AGENT_INSTRUCTIONS.split('\n').filter((line) => line.trim() !== '')
@@ -192,6 +238,14 @@ describe('the instructions and the guide', () => {
     const guide = formatGuide()
     expect(guide).toContain(JSON.stringify(GUIDE_EXAMPLE, null, 2))
     expect(GUIDE_EXAMPLE.endpoints.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('teaches the review, the comparison and the bulk edit, in the guide and in the instructions', () => {
+    const guide = formatGuide()
+    for (const name of ['pico_review_contract', 'pico_diff_with_openapi', 'patch_endpoints', 'dryRun']) expect(guide, name).toContain(name)
+    for (const key of ['endpointIds', 'folder', 'method', 'pathPrefix', 'addResponses', 'addHeaders', 'removeHeaders', 'appendDescription', 'renameField', 'useCommonHeaders']) expect(guide, key).toContain(key)
+    expect(AGENT_INSTRUCTIONS).toContain('pico_review_contract')
+    expect(AGENT_INSTRUCTIONS).toContain('patch_endpoints')
   })
 
   it('never mentions a tool that does not exist', () => {

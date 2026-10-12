@@ -6,7 +6,8 @@ connecting, start with the [README](../README.md).
 - [How it works](#how-it-works)
 - [Options](#options)
 - [What the agent may see and do](#what-the-agent-may-see-and-do)
-- [Tools](#tools), [Errors](#errors) and [Prompts](#prompts)
+- [Tools](#tools), [Review and comparison](#review-and-comparison), [Changing many endpoints](#changing-many-endpoints),
+  [Errors](#errors) and [Prompts](#prompts)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [The protocol](#the-protocol)
@@ -90,12 +91,14 @@ The agent sees these in its tool list. "Runs in" says who answers: the connector
 | `pico_get_project` | tab | A project as an outline, or the endpoints you name in full (the shape the edit tools take). Pictures are never included. |
 | `pico_get_examples` | tab | The example request and response bodies Pico generates for an endpoint. |
 | `pico_export` | tab | A project or chosen endpoints as `openapi` (YAML), `pico` (a project file), `markdown`, `postman` or `html`. |
+| `pico_review_contract` | tab | Checks a project, or chosen endpoints, for what a reviewer would raise (see [Review](#review-and-comparison)). Returns counts and findings with a fix for each; changes nothing. |
+| `pico_diff_with_openapi` | tab | Compares a project with an OpenAPI document (for example one the code generates): what exists on one side only, and what differs in the endpoints both have, each change marked breaking or not. Changes nothing. |
 | `pico_create_project` | tab | A new empty project, opened like in the UI, optionally with common headers. |
 | `pico_add_endpoints` | tab | Up to 200 endpoints with headers, query, body and responses, as fields or as a JSON sample; `onDuplicate` is `skip`, `replace` or `add`. |
 | `pico_update_endpoint` | tab | Changes the keys it is given; a section it is given is replaced as a whole. |
 | `pico_delete_endpoints` | tab | Deletes endpoints by id (all or nothing); restore point and Undo. |
 | `pico_import_document` | tab | A new project from OpenAPI (JSON or YAML) or from a Pico project file; what could not be carried over comes back as warnings. |
-| `pico_apply_ops` | tab | Up to 50 ordered structural changes with one Undo: rename, duplicate or delete a project, copy endpoints, folders, moving endpoints, common headers, templates. |
+| `pico_apply_ops` | tab | Up to 50 ordered structural changes with one Undo: rename, duplicate or delete a project, copy endpoints, folders, moving endpoints, common headers, templates, and `patch_endpoints`, one change to many endpoints (see [Changing many endpoints](#changing-many-endpoints)). |
 | `pico_undo_last_edit` | tab | Takes back the agent's own latest change, repeatable. |
 | `pico_focus` | tab | Opens a project or endpoint in front of you. Only the screen changes, so it also works in Read only. |
 
@@ -109,8 +112,56 @@ nesting, 200,000 characters in one text (an example and a sample count by their 
 characters in a name; an answer longer than 400,000 characters is refused with a hint to ask for less. A frame
 is limited to 4 MiB on the wire, counted in bytes, so a very large call is refused for that call alone
 (`too-large`) and the connection stays up. A document sent to `pico_import_document` may not expand, once its
-YAML aliases are written out, to more values than it has characters (and at least a million): a short file
-that repeats its parts into billions of fields is refused.
+YAML aliases and `$ref` references are written out, to more values than it has characters (and at least a
+million): a short file that repeats its parts into billions of fields is refused. The same holds for the
+document of `pico_diff_with_openapi`.
+
+### Review and comparison
+
+`pico_review_contract` reports **findings**, each with a `rule`, a `severity`, the `endpointId` (absent when it is
+about the project as a whole), `where` in the endpoint, a `message` and a `fix` that names the tool to use. The
+severity is `warning` for what is probably a mistake and `hint` for what could be better; nothing blocks an edit,
+and the agent is told to drop findings that do not fit the API.
+
+| Severity | Rules |
+|---|---|
+| warning | `endpoint-unnamed`, `route-conflict`, `name-duplicate`, `status-code`, `field-warning` (what the editor warns about: repeated names, an example that does not fit its type), `no-success-response`, `body-on-get` |
+| hint | `no-error-response`, `body-on-delete`, `description-missing`, `example-missing`, `header-repeated` (a header on three or more endpoints that belongs in the common headers), `naming-mixed`, `path-style-mixed`, `trailing-slash` |
+
+With `endpointIds` only those endpoints are checked and the checks across the whole project (`header-repeated`,
+`naming-mixed`, `path-style-mixed`) are left out; a route or a name that another endpoint shares is still found.
+At most 200 findings are listed, and `counts` covers all of them (`truncated` says when the list is cut short).
+
+`pico_diff_with_openapi` takes the OpenAPI document (3.x or Swagger 2, JSON or YAML, up to 3,000,000
+characters) and reads it the way an import does: local `$ref` references are followed, `allOf` is merged, and
+what cannot be read (a remote reference, a cycle) is named in `notes`. The **project is the baseline**. It
+lists `onlyInPico`, `onlyInOpenApi` and `changed` (per endpoint, with the `where`, the `kind` of change and
+`before` and `after`), with a `summary` that counts everything. A change is marked `breaking` when a caller
+built against the contract would break against the document: for example a new required request field, a request
+field that changed type, a response field that was removed, changed type, may be missing or may be null, an
+endpoint that is gone, or a success response that is gone. That is a rule of thumb about requests and responses,
+not a proof, and each breaking change says why.
+At most 200 endpoints on either side only, 100 changed endpoints and 50 changes in each are listed (`truncated`
+says so); `summary` counts everything. What the document format cannot hold (an enum's values, a file) reads
+back as text on both sides and is not reported as a difference.
+
+### Changing many endpoints
+
+`patch_endpoints` is an op of `pico_apply_ops`, so it shares the call's single step: one restore point and one
+Undo, and if a later op fails nothing changes.
+
+- **`where`** picks the endpoints. Give at least one of `endpointIds`, `folder` (a name or id; empty text means no
+  folder), `method` and `pathPrefix` (`/orders` takes `/orders` and what is below it, not `/orders-archive`);
+  an endpoint must match all that are given, so "everything" is never an accident (`pathPrefix` `/` says it
+  on purpose).
+- **`patch`** says what to do, at least one of `addResponses` (the shape `pico_add_endpoints` takes, each status
+  once), `addHeaders`, `removeHeaders`, `appendDescription`, `renameField` (`from`, `to` and where: `query`,
+  `body`, `responses` or `headers`; without it query, body and responses) and `useCommonHeaders`.
+- Each change is **skipped where it is already made**, so repeating the call changes nothing (the answer says
+  `changed: 0`). A rename into a name that is already used beside the field is not done and is reported.
+- **`dryRun`: true** reports what would change, without changing it. The answer lists the first 50 endpoints that
+  would change; `matched` and `changed` count them all. A dry run is still a call of the change tool, so a
+  *Read only* connection refuses it.
 
 ### Errors
 
@@ -140,8 +191,8 @@ with the tools above.
 |---|---|
 | `contract_from_design` | A design or screenshot you attached, into a contract. |
 | `contract_from_code` | The HTTP API in this codebase, into a contract. |
-| `sync_contract_with_code` | Compare the open contract with the code and bring them in line. |
-| `review_contract` | Find and fix what is inconsistent or missing. |
+| `sync_contract_with_code` | Compare the open contract with the code (through `pico_diff_with_openapi` when the code can produce an OpenAPI document) and bring them in line. |
+| `review_contract` | Run `pico_review_contract`, add what a reviewer would see, and fix what is worth fixing. |
 | `document_endpoints` | Fill in missing descriptions and examples. |
 | `contract_test_loop` | Export OpenAPI, run Specmatic or Schemathesis against the service, fix the side that is wrong. |
 | `migrate_from_postman` | Convert a Postman collection into a Pico project. |

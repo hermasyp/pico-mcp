@@ -169,11 +169,47 @@ describe('the tools that go to the tab', () => {
     expect(tab.received).toHaveLength(0)
   })
 
+  it('refuses a bulk edit that is not shaped right, and a comparison without a document, before the tab is asked', async () => {
+    const { client, pair } = await rig()
+    const tab = await pair()
+    const patch = (where: unknown, change: unknown, extra: Record<string, unknown> = {}) => ({ ops: [{ op: 'patch_endpoints', where, patch: change, ...extra }] })
+    const bad = [
+      patch({ colour: 'red' }, { useCommonHeaders: false }),
+      patch({ method: 'FETCH' }, { useCommonHeaders: false }),
+      patch({ method: 'GET' }, { colour: 'red' }),
+      patch({ method: 'GET' }, { renameField: { from: 'a' } }),
+      patch({ method: 'GET' }, { renameField: { from: 'a', to: 'b', in: 'nowhere' } }),
+      patch({ method: 'GET' }, { addResponses: [{ description: 'no status' }] }),
+      patch({ method: 'GET' }, { useCommonHeaders: false }, { dryRun: 'yes' }),
+    ]
+    for (const args of bad) expect((await client.callTool({ name: 'pico_apply_ops', arguments: args })).isError, JSON.stringify(args)).toBe(true)
+    expect((await client.callTool({ name: 'pico_diff_with_openapi', arguments: {} })).isError).toBe(true)
+    expect((await client.callTool({ name: 'pico_review_contract', arguments: { endpointIds: [] } })).isError).toBe(true)
+    expect(tab.received).toHaveLength(0)
+    const good = client.callTool({ name: 'pico_apply_ops', arguments: patch({ pathPrefix: '/' }, { addResponses: [{ status: '500' }], renameField: { from: 'a', to: 'b', in: 'body' } }, { dryRun: true }) })
+    const call = await tab.nextCall()
+    expect(call).toMatchObject({ tool: 'pico_apply_ops' })
+    tab.reply(call.id, { data: { results: [] }, warnings: [] })
+    expect((await good).isError).toBeFalsy()
+  })
+
   it('forwards every tool of the catalog that is not answered by the connector', async () => {
     const { client, pair } = await rig()
     const tab = await pair()
+    // The smallest arguments each tool accepts; a tool that needs none is not listed.
+    const smallest: Record<string, Record<string, unknown>> = {
+      pico_get_examples: { endpointId: 'e1' },
+      pico_export: { format: 'markdown' },
+      pico_diff_with_openapi: { openapi: 'openapi: 3.0.3\npaths: {}\n' },
+      pico_create_project: { name: 'P' },
+      pico_delete_endpoints: { endpointIds: ['e1'] },
+      pico_import_document: { content: 'x' },
+      pico_update_endpoint: { endpointId: 'e1', set: { name: 'n' } },
+      pico_apply_ops: { ops: [{ op: 'create_folder', name: 'F' }] },
+      pico_add_endpoints: { endpoints: [{ name: 'A', method: 'GET', path: '/a' }] },
+    }
     for (const tool of AGENT_TOOLS.filter((item) => item.home !== 'connector')) {
-      const args = tool.name === 'pico_get_examples' ? { endpointId: 'e1' } : tool.name === 'pico_export' ? { format: 'markdown' } : tool.name === 'pico_create_project' ? { name: 'P' } : tool.name === 'pico_delete_endpoints' ? { endpointIds: ['e1'] } : tool.name === 'pico_import_document' ? { content: 'x' } : tool.name === 'pico_update_endpoint' ? { endpointId: 'e1', set: { name: 'n' } } : tool.name === 'pico_apply_ops' ? { ops: [{ op: 'create_folder', name: 'F' }] } : tool.name === 'pico_add_endpoints' ? { endpoints: [{ name: 'A', method: 'GET', path: '/a' }] } : {}
+      const args = smallest[tool.name] ?? {}
       const pending = client.callTool({ name: tool.name, arguments: args })
       const call = await tab.nextCall()
       expect(call.tool).toBe(tool.name)
