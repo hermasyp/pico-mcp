@@ -24,7 +24,7 @@ unchanged (1), so a connector of this version still works with an older Pico for
   it changes nothing, and `dryRun` reports without changing.
 - The `review_contract` and `sync_contract_with_code` prompts use them; the format guide and the server
   instructions teach them.
-- The tool list grows from about 18,400 to about 23,800 characters; its test budget is now 25,000.
+- The tool list grows from 14 to 16 tools and from about 18,000 to about 24,100 characters; its test budget is now 25,000.
 
 ## [1.0.0] - 2026-10-11
 
