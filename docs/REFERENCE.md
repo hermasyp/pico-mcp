@@ -67,8 +67,20 @@ This part is what the Pico tab does with the connection; it is described here be
   the other projects it may see, or *Every project*. A project that is not shared is never read, named or
   changed; asking for it fails as if it did not exist, and the agent is only told how many projects it cannot
   see. Projects the agent creates are shared with it.
-- **Can edit / Read only.** *Read only* lets the agent look; every change is refused with a pointer to this
-  switch. Both are saved for the tab, so a reload keeps them.
+- **Can edit / Ask me first / Read only.** *Can edit* lets changes land at once, with Undo. *Read only* lets
+  the agent look; every change is refused with a pointer to this switch. *Ask me first* (Pico 2.3.0 and a
+  connector of 1.2.0 or later) holds back every change: Pico works out what it would do, shows you the list
+  (`+` added, `~` changed, `−` removed, with the warnings), and only **Apply** makes it. **Decline** answers
+  the agent with `declined` and changes nothing; so does no answer within 5 minutes (`no-answer`). Reading,
+  `pico_focus` and a change that would change nothing never wait for you. If your contract changed while a
+  proposal waited, it is worked out again and you are asked again, so what you apply is exactly what you
+  were shown. The choice is saved for the tab, so a reload keeps it. A connector older than 1.2.0 cannot do
+  this: Pico then offers only the other two and, if you had chosen *Ask me first*, falls back to *Read only*
+  rather than to *Can edit*.
+- **While a change waits.** The agent's call stays open for up to 5 minutes. If the agent asked for progress
+  notices, the connector sends one every 10 seconds ("Waiting for the person to approve this change in
+  Pico."); some agent hosts stop waiting after about a minute anyway, and then Pico drops the proposal and
+  tells you so. Only the Pico tab shows the question, so it also shows in the top bar and the page title.
 - **Restore point.** The first change of a burst of edits (edits less than two minutes apart, at most 25
   changes) keeps a restore point first; Pico lists it in Settings → Storage and backup as *Before agent edits ·
   <agent>* (Pico 2.1.1 and later keeps the newest 10 of these in a place of their own).
@@ -99,8 +111,8 @@ The agent sees these in its tool list. "Runs in" says who answers: the connector
 | `pico_delete_endpoints` | tab | Deletes endpoints by id (all or nothing); restore point and Undo. |
 | `pico_import_document` | tab | A new project from OpenAPI (JSON or YAML) or from a Pico project file; what could not be carried over comes back as warnings. |
 | `pico_apply_ops` | tab | Up to 50 ordered structural changes with one Undo: rename, duplicate or delete a project, copy endpoints, folders, moving endpoints, common headers, templates, and `patch_endpoints`, one change to many endpoints (see [Changing many endpoints](#changing-many-endpoints)). |
-| `pico_undo_last_edit` | tab | Takes back the agent's own latest change, repeatable. |
-| `pico_focus` | tab | Opens a project or endpoint in front of you. Only the screen changes, so it also works in Read only. |
+| `pico_undo_last_edit` | tab | Takes back the agent's own latest change, repeatable. In *Ask me first* it asks like any other change. |
+| `pico_focus` | tab | Opens a project or endpoint in front of you. Only the screen changes, so it also works in Read only and never asks. |
 
 Warnings (a duplicate name, an odd status code, a route that repeats, an example that does not fit its type)
 come back with the answer and never block an edit. Everything the agent sends is checked strictly and then
@@ -206,14 +218,15 @@ An error carries a code, a message, sometimes the `path` of the argument and a `
 | `not-found` | There is no such project or endpoint, or it is not shared. The message lists the valid ones. |
 | `not-editable` | This tab cannot save right now (not the editing tab, or storage is stuck). Reading still works. |
 | `read-only` | The person limited the connection to reading. |
-| `conflict` | The person changed those projects after the edit, so taking it back would lose their work. |
+| `conflict` | The person changed those projects after the edit, so taking it back would lose their work. Also: Pico already holds as many proposals as it will wait on, so wait for the person before sending more. |
 | `too-large` | The answer would be too long, or a message too large to send. |
 | `unknown-tool` | The tool does not exist, or belongs to the other side. |
 | `not-connected` | No Pico tab is connected: call `pico_connect` and show the code. |
 | `disconnected` | The tab went away while the call was running. |
-| `timeout` | The tab did not answer within 30 seconds. |
+| `timeout` | The tab did not answer within 30 seconds (or, for a change that waits for the person, said nothing within 5 minutes and 15 seconds). The connector then tells the tab to drop the call. |
 | `internal` | Something unexpected happened; try a smaller request. |
-| `declined`, `no-answer` | Reserved for a later way of asking the person first. This version never sends them. |
+| `declined` | In *Ask me first* the person said no. Nothing was changed. Do not send the same change again; ask what they want. Three refusals within two minutes make Pico refuse further changes for a minute. |
+| `no-answer` | In *Ask me first* nobody answered within 5 minutes, the agent host stopped waiting, or the person was not there. Nothing was changed. Tell the person it is waiting; do not retry in a loop. |
 
 ### Prompts
 
@@ -247,8 +260,8 @@ with the tools above.
   logged) and in the pane. Pico keeps it in the tab's session storage only, nowhere else, and it stops
   working when the connector exits. It does end up in the agent's conversation: treat that transcript as
   holding a one-time key to your running connector.
-- **Least privilege.** Only the projects you share; Read only on request; the writer tab only; a tab that
-  loses the writer lock lets go.
+- **Least privilege.** Only the projects you share; Ask me first or Read only on request; the writer tab only;
+  a tab that loses the writer lock lets go.
 - **Nothing runs.** The tools read and edit a contract. They do not execute requests, read files or open
   connections, and pictures never cross the bridge.
 - **Contract text is data.** Names, descriptions and examples are written by people (and can come from files
@@ -257,7 +270,7 @@ with the tools above.
 
 What this does not protect against: a program on your own machine that can read the agent's conversation or
 the connector's memory can use the code while the connector runs; and an agent that you have allowed to edit
-can make changes you did not intend, which is what Read only, the restore points and Undo are for.
+can make changes you did not intend, which is what Ask me first, Read only, the restore points and Undo are for.
 
 ## Troubleshooting
 
@@ -287,18 +300,33 @@ written in groups of four for reading aloud. A pasted code is forgiven for case,
 brackets; a Pico link carries it as `#agent=…`. Text over 1,000 characters is not read as one.
 
 **Frames** are JSON text messages, parsed strictly. The tab sends `hello` (protocol version, app version, a
-nonce), then `auth` (its proof), then a `result` for each call. The connector sends `challenge` (its nonce and
-proof, and who the agent is), `ready`, then `call` frames, and `bye` when it is shutting down. Each side signs
+nonce), then `auth` (its proof), then a `result` for each call, and `awaiting-user` (`id`) when a call waits for
+the person's decision. The connector sends `challenge` (its nonce and proof, who the agent is and its
+`features`), `ready`, then `call` frames, `cancel` (`id`) for a call it no longer wants, and `bye` when it is
+shutting down. Each side signs
 `pico-agent/<version>|<role>|<client nonce>|<server nonce>` with HMAC-SHA256 and the token as the key; the role
 is part of it, so a proof made for one side is of no use to the other.
 
 **Close codes** in the 4000 range are ours: `badRequest` 4400, `badProof` 4401, `handshakeTimeout` 4408, `busy`
 4409, `tooLarge` 4413, `version` 4426, and 4000 for a goodbye. The connector waits 30 seconds for an answer and
-pings every 15.
+pings every 15. Once the tab has said `awaiting-user` for a call it waits 5 minutes plus 15 seconds from that
+notice (once per call; saying it again changes nothing), which is longer than the 5 minutes the tab gives the
+person, so the tab's own answer comes first.
 
 **Versions.** `AGENT_PROTOCOL` is 1. A change that an older end could not understand raises it, and the two
 ends then refuse each other with a message that says so. Adding a tool does not: a tab answers `unknown-tool`
 to a tool it does not know.
+
+**Abilities.** An ability that only some versions have is announced in the connector's challenge as `features`
+(today `ask`), and the tab uses it only when it is named: a tab never sends `awaiting-user` to a connector that
+did not announce `ask`, because a connector drops the socket on a frame it does not know. A tab ignores a frame
+it does not know, so the connector may send `cancel` to any tab. A `features` list that makes no sense is read
+as "none"; it never makes the connector unusable.
+
+| | connector 1.1.0 or earlier | connector 1.2.0 or later |
+|---|---|---|
+| **Pico 2.2.0 or earlier** | as before | as before: the tab never asks the person, so nothing waits |
+| **Pico 2.3.0 or later** | *Can edit* and *Read only* only | all three modes |
 
 ## Developing
 

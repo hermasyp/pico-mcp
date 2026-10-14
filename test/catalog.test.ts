@@ -224,6 +224,17 @@ describe('the instructions and the guide', () => {
     expect(AGENT_INSTRUCTIONS).toContain('Inferred')
   })
 
+  it('tells an agent what to do when the person approves each change: say what is coming, wait, and do not repeat a refusal', () => {
+    expect(AGENT_INSTRUCTIONS).toContain('Ask me first')
+    expect(AGENT_INSTRUCTIONS).toContain('declined')
+    expect(AGENT_INSTRUCTIONS).toContain('no-answer')
+    expect(AGENT_INSTRUCTIONS.toLowerCase()).toContain('do not send the same change again')
+    const guide = formatGuide()
+    expect(guide).toContain('Ask me first')
+    expect(guide).toContain('Read only')
+    expect(guide).toContain('declined')
+  })
+
   it('names every field type, method and body type, and says what the limits are', () => {
     const guide = formatGuide()
     for (const type of FIELD_TYPES) expect(guide).toContain(type)

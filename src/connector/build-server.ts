@@ -1,4 +1,4 @@
-import { McpServer, fromJsonSchema } from '@modelcontextprotocol/server'
+import { McpServer, fromJsonSchema, type ServerContext } from '@modelcontextprotocol/server'
 import { AGENT_INSTRUCTIONS, AGENT_PROMPTS, AGENT_TOOLS, formatGuide, type AgentPromptDef, type AgentToolDef } from '../catalog'
 import { formatPairing, pairingLink, type ToolError } from '../protocol'
 import type { Config } from './config'
@@ -17,6 +17,35 @@ export interface ServerDeps {
   version: string
   /** Told about the server once it exists, so the hub can name the agent in its handshake. */
   onServer?: (server: McpServer) => void
+  /** How often the agent is told, while a change waits for the person to approve it. */
+  progressMs?: number
+}
+
+/** A change that waits for the person can take minutes; an agent that asked for progress notices hears every so often that it is alive. */
+const PROGRESS_MS = 10_000
+const WAITING = 'Waiting for the person to approve this change in Pico.'
+
+/** Progress notices for one call, started when the tab says the call waits for the person. Nothing is sent to an agent that did not ask for them. */
+function progressNotices(context: ServerContext, every: number): { start(): void; stop(): void } {
+  const token = context.mcpReq._meta?.progressToken
+  let timer: ReturnType<typeof setInterval> | null = null
+  let count = 0
+  const send = (progressToken: string | number): void => {
+    count += 1
+    context.mcpReq.notify({ method: 'notifications/progress', params: { progressToken, progress: count, message: WAITING } }).catch(() => {})
+  }
+  return {
+    start() {
+      if (token === undefined || timer !== null) return
+      send(token)
+      timer = setInterval(() => send(token), every)
+      timer.unref()
+    },
+    stop() {
+      if (timer !== null) clearInterval(timer)
+      timer = null
+    },
+  }
 }
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: true }
@@ -75,7 +104,7 @@ function promptSchema(prompt: AgentPromptDef): Record<string, unknown> | undefin
   }
 }
 
-export function buildServer({ hub, config, version, onServer }: ServerDeps): McpServer {
+export function buildServer({ hub, config, version, onServer, progressMs = PROGRESS_MS }: ServerDeps): McpServer {
   const server = new McpServer({ name: 'pico-mcp', version }, { instructions: AGENT_INSTRUCTIONS, capabilities: { tools: {}, prompts: {} } })
 
   for (const tool of AGENT_TOOLS) {
@@ -87,13 +116,18 @@ export function buildServer({ hub, config, version, onServer }: ServerDeps): Mcp
         inputSchema: fromJsonSchema(tool.inputSchema),
         annotations: { title: tool.title, readOnlyHint: tool.access === 'read', destructiveHint: tool.access === 'destructive', openWorldHint: false },
       },
-      async (args: unknown): Promise<ToolResult> => {
+      async (args: unknown, context: ServerContext): Promise<ToolResult> => {
         if (tool.name === 'pico_connect') return connectTool(hub, config)
         if (tool.name === 'pico_format_guide') return text(formatGuide())
         // Imports and big batches take the tab longer than a read does.
         const slow = tool.name === 'pico_import_document' || tool.name === 'pico_add_endpoints' || tool.name === 'pico_apply_ops'
-        const answer = await hub.call(tool.name, args ?? {}, slow ? hub.callMs * 2 : hub.callMs)
-        return answer.ok ? success(tool, answer.data) : failure(answer.error)
+        const notices = progressNotices(context, progressMs)
+        try {
+          const answer = await hub.call(tool.name, args ?? {}, slow ? hub.callMs * 2 : hub.callMs, { signal: context.mcpReq.signal, onAwaiting: notices.start })
+          return answer.ok ? success(tool, answer.data) : failure(answer.error)
+        } finally {
+          notices.stop()
+        }
       },
     )
   }

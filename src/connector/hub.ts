@@ -5,6 +5,7 @@ import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import {
   AGENT_PROTOCOL,
   CLOSE,
+  FEATURES,
   FrameTooLargeError,
   LIMITS,
   PORT_SPAN,
@@ -41,12 +42,26 @@ export interface HubOptions {
   handshakeMs?: number
   heartbeatMs?: number
   callMs?: number
+  /** How long the person has to answer a change that waits for their approval. */
+  askMs?: number
+  /** How much longer than that the connector waits for a tab that has gone quiet. */
+  askGraceMs?: number
   /** How many sockets may be in the middle of the handshake at once. */
   maxUnfinished?: number
   log?: (message: string) => void
 }
 
 export type HubResult = { ok: true; data: unknown } | { ok: false; error: ToolError }
+
+export interface CallOptions {
+  /** Aborted when the agent stops waiting for the answer; the tab is told to drop the call. */
+  signal?: AbortSignal
+  /** Called once, when the tab says the call is waiting for the person to decide. */
+  onAwaiting?: () => void
+}
+
+/** What a call resolves to when the agent stopped waiting. Nobody sees it; the agent has moved on. */
+const STOPPED: HubResult = { ok: false, error: { code: 'no-answer', message: 'The agent stopped waiting for Pico.' } }
 
 type Phase = 'hello' | 'auth' | 'ready'
 
@@ -62,8 +77,14 @@ interface Session {
 }
 
 interface Pending {
+  session: Session
   resolve: (result: HubResult) => void
   timer: ReturnType<typeof setTimeout>
+  /** The tab has said that this call waits for the person. */
+  awaiting: boolean
+  onAwaiting?: () => void
+  /** Stop listening for the agent giving up. */
+  release?: () => void
 }
 
 const LOOPBACK = '127.0.0.1'
@@ -95,6 +116,11 @@ export class Hub {
   /** How long a call waits for the tab by default. */
   get callMs(): number {
     return this.#options.callMs ?? TIMING.callMs
+  }
+
+  /** How long a call waits once the tab has said that it waits for the person. */
+  get #askWaitMs(): number {
+    return (this.#options.askMs ?? TIMING.askMs) + (this.#options.askGraceMs ?? TIMING.askGraceMs)
   }
 
   get pairing(): Pairing {
@@ -145,7 +171,7 @@ export class Hub {
   }
 
   /** Ask the tab to run a tool. Never throws: a missing tab, a timeout or a dropped connection is an error result. */
-  call(tool: string, args: unknown, timeoutMs: number = this.#options.callMs ?? TIMING.callMs): Promise<HubResult> {
+  call(tool: string, args: unknown, timeoutMs: number = this.#options.callMs ?? TIMING.callMs, options: CallOptions = {}): Promise<HubResult> {
     const session = this.#current
     if (!session) {
       return Promise.resolve({
@@ -157,6 +183,8 @@ export class Hub {
         },
       })
     }
+    // The agent already gave up: nothing is sent.
+    if (options.signal?.aborted) return Promise.resolve(STOPPED)
     const id = this.#nextId++
     let text: string
     try {
@@ -173,17 +201,27 @@ export class Hub {
     }
     return new Promise<HubResult>((resolve) => {
       const timer = setTimeout(() => {
-        this.#pending.delete(id)
-        resolve({
-          ok: false,
-          error: {
-            code: 'timeout',
-            message: `Pico did not answer within ${Math.round(timeoutMs / 1000)} seconds.`,
-            hint: 'Is the Pico tab open and awake? A browser can freeze a tab that is in the background. Ask the person to bring it to the front, then try again.',
+        this.#finish(
+          id,
+          {
+            ok: false,
+            error: {
+              code: 'timeout',
+              message: `Pico did not answer within ${Math.round(timeoutMs / 1000)} seconds.`,
+              hint: 'Is the Pico tab open and awake? A browser can freeze a tab that is in the background. Ask the person to bring it to the front, then try again.',
+            },
           },
-        })
+          true,
+        )
       }, timeoutMs)
-      this.#pending.set(id, { resolve, timer })
+      const entry: Pending = { session, resolve, timer, awaiting: false, ...(options.onAwaiting ? { onAwaiting: options.onAwaiting } : {}) }
+      const signal = options.signal
+      if (signal) {
+        const stopped = (): void => this.#finish(id, STOPPED, true)
+        signal.addEventListener('abort', stopped, { once: true })
+        entry.release = () => signal.removeEventListener('abort', stopped)
+      }
+      this.#pending.set(id, entry)
       if (!this.#sendText(session, text)) this.#failPending('The connection to Pico was lost.')
     })
   }
@@ -284,6 +322,7 @@ export class Hub {
     if (session.phase === 'hello' && frame.type === 'hello') return this.#hello(session, frame)
     if (session.phase === 'auth' && frame.type === 'auth') return this.#auth(session, frame)
     if (session.phase === 'ready' && frame.type === 'result') return this.#result(session, frame)
+    if (session.phase === 'ready' && frame.type === 'awaiting-user') return this.#awaiting(session, frame)
     return this.#drop(session, CLOSE.badRequest, 'That frame came at the wrong time.')
   }
 
@@ -302,6 +341,7 @@ export class Hub {
       server: 'pico-mcp',
       serverVersion: this.#options.serverVersion,
       client: this.#options.getClient?.() ?? null,
+      features: [...FEATURES],
       nonce: session.serverNonce,
       proof: signProof(this.#options.token, proofInput('server', session.clientNonce, session.serverNonce)),
     })
@@ -341,15 +381,54 @@ export class Hub {
   }
 
   #result(session: Session, frame: Extract<BrowserFrame, { type: 'result' }>): void {
-    const entry = this.#pending.get(frame.id)
-    if (!entry) {
+    if (!this.#pending.has(frame.id)) {
       // An answer to a call that timed out is ignored; an answer to a call never made is not allowed.
       if (frame.id >= this.#nextId) this.#drop(session, CLOSE.badRequest, 'No such call.')
       return
     }
+    this.#finish(frame.id, frame.ok ? { ok: true, data: frame.data } : { ok: false, error: frame.error })
+  }
+
+  /**
+   * The tab says a call waits for the person to decide, so it may take minutes instead of seconds. The clock
+   * is reset once, from the first notice: a tab cannot keep a call alive for ever by saying it again.
+   */
+  #awaiting(session: Session, frame: Extract<BrowserFrame, { type: 'awaiting-user' }>): void {
+    if (frame.id >= this.#nextId) {
+      this.#drop(session, CLOSE.badRequest, 'No such call.')
+      return
+    }
+    const entry = this.#pending.get(frame.id)
+    // A notice for a call that is over, or that has been noticed before, means nothing.
+    if (!entry || entry.session !== session || entry.awaiting) return
+    entry.awaiting = true
     clearTimeout(entry.timer)
-    this.#pending.delete(frame.id)
-    entry.resolve(frame.ok ? { ok: true, data: frame.data } : { ok: false, error: frame.error })
+    entry.timer = setTimeout(() => {
+      this.#finish(
+        frame.id,
+        {
+          ok: false,
+          error: {
+            code: 'timeout',
+            message: `Pico did not hear from the person within ${Math.round((this.#options.askMs ?? TIMING.askMs) / 60_000)} minutes, so the change was dropped.`,
+            hint: 'Nothing was changed. Tell the person what you wanted to do and ask them to look at Pico; do not send the same change again until they say so.',
+          },
+        },
+        true,
+      )
+    }, this.#askWaitMs)
+    entry.onAwaiting?.()
+  }
+
+  /** End a call with `result`. `cancel`: also tell the tab it is no longer wanted. */
+  #finish(id: number, result: HubResult, cancel = false): void {
+    const entry = this.#pending.get(id)
+    if (!entry) return
+    clearTimeout(entry.timer)
+    entry.release?.()
+    this.#pending.delete(id)
+    if (cancel) this.#send(entry.session, { type: 'cancel', id })
+    entry.resolve(result)
   }
 
   #closed(session: Session): void {
@@ -365,10 +444,8 @@ export class Hub {
   }
 
   #failPending(message: string): void {
-    for (const [id, entry] of [...this.#pending]) {
-      clearTimeout(entry.timer)
-      this.#pending.delete(id)
-      entry.resolve({
+    for (const id of [...this.#pending.keys()]) {
+      this.#finish(id, {
         ok: false,
         error: { code: 'disconnected', message, hint: 'Ask the person to reconnect Pico (call pico_connect for a new code if the connector was restarted).' },
       })

@@ -39,7 +39,19 @@ export const TIMING = {
   /** How long the connector waits for the tab to answer a call. */
   callMs: 30_000,
   heartbeatMs: 15_000,
+  /** How long the person has to answer a change that waits for their approval (the tab's own deadline for it). */
+  askMs: 5 * 60_000,
+  /** How much longer the connector waits for a tab that has gone quiet, so that the tab's own answer comes first. */
+  askGraceMs: 15_000,
 } as const
+
+/**
+ * Abilities the connector announces in its challenge. The tab uses one only when it is named there, so a tab and
+ * a connector of different ages still work together for everything else.
+ * `ask`: a change may wait for the person's approval in Pico (the tab sends `awaiting-user`; the connector keeps
+ * the call alive longer, tells the agent it is waiting, and sends `cancel` when it stops waiting).
+ */
+export const FEATURES = ['ask'] as const
 
 /** WebSocket close codes (the 4000 range is ours). */
 export const CLOSE = {
@@ -204,6 +216,8 @@ export type BrowserFrame =
   | { type: 'auth'; proof: string }
   | { type: 'result'; id: number; ok: true; data: unknown }
   | { type: 'result'; id: number; ok: false; error: ToolError }
+  /** The call `id` waits for the person to decide. Only sent to a connector that announced `ask`. */
+  | { type: 'awaiting-user'; id: number }
 
 export type ConnectorFrame =
   | {
@@ -212,11 +226,15 @@ export type ConnectorFrame =
       server: 'pico-mcp'
       serverVersion: string
       client: { name: string; version: string } | null
+      /** What this connector can do beyond the basics (see `FEATURES`). Absent from a connector that announces nothing. */
+      features?: string[]
       nonce: string
       proof: string
     }
   | { type: 'ready' }
   | { type: 'call'; id: number; tool: string; args: unknown }
+  /** The call `id` is no longer wanted (the agent stopped waiting, or the connector gave up): drop it. */
+  | { type: 'cancel'; id: number }
   | { type: 'bye'; reason: string }
 
 /** How many bytes `text` takes once written as UTF-8, which is what a WebSocket message is measured in. */
@@ -281,6 +299,8 @@ export function parseBrowserFrame(text: string): BrowserFrame | null {
       return null
     case 'auth':
       return isProof(value.proof) ? { type: 'auth', proof: value.proof } : null
+    case 'awaiting-user':
+      return isCallId(value.id) ? { type: 'awaiting-user', id: value.id } : null
     case 'result': {
       if (!isCallId(value.id)) return null
       if (value.ok === true) return { type: 'result', id: value.id, ok: true, data: value.data ?? null }
@@ -309,12 +329,14 @@ export function parseConnectorFrame(text: string): ConnectorFrame | null {
         if (raw === undefined || typeof raw !== 'object' || Array.isArray(raw) || !isText(raw.name, 200) || !isText(raw.version, 100)) return null
         client = { name: raw.name, version: raw.version }
       }
+      const features = readFeatures(value.features)
       return {
         type: 'challenge',
         v: value.v as number,
         server: 'pico-mcp',
         serverVersion: value.serverVersion,
         client,
+        ...(features.length > 0 ? { features } : {}),
         nonce: value.nonce,
         proof: value.proof,
       }
@@ -324,11 +346,30 @@ export function parseConnectorFrame(text: string): ConnectorFrame | null {
     case 'call':
       if (!isCallId(value.id) || typeof value.tool !== 'string' || value.tool.length === 0 || value.tool.length > 64) return null
       return { type: 'call', id: value.id, tool: value.tool, args: value.args ?? {} }
+    case 'cancel':
+      return isCallId(value.id) ? { type: 'cancel', id: value.id } : null
     case 'bye':
       return isText(value.reason, 2_000) ? { type: 'bye', reason: value.reason } : null
     default:
       return null
   }
+}
+
+const MAX_FEATURES = 8
+const FEATURE_NAME = /^[a-z][a-z0-9-]{0,31}$/
+
+/**
+ * The abilities in a challenge. Lenient on purpose: a list that makes no sense means "none", never a refused
+ * connector, because a connector that cannot be used at all is worse than one that cannot do one extra thing.
+ */
+function readFeatures(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const names: string[] = []
+  for (const item of value) {
+    if (typeof item === 'string' && FEATURE_NAME.test(item) && !names.includes(item)) names.push(item)
+    if (names.length === MAX_FEATURES) break
+  }
+  return names
 }
 
 /** A frame that would be over the limit once written. */

@@ -79,6 +79,11 @@ export class FakeTab {
     this.send({ type: 'result', id, ok: false, error })
   }
 
+  /** Say that the call is waiting for the person to decide. */
+  awaiting(id: number): void {
+    this.send({ type: 'awaiting-user', id })
+  }
+
   close(): void {
     this.socket.close()
   }
@@ -122,13 +127,16 @@ export async function pairTab(port: number, token: string, options: TabOptions =
 }
 
 /** Say hello and read the challenge, without answering it. */
-export async function helloOnly(port: number, options: TabOptions = {}): Promise<{ tab: FakeTab; clientNonce: string; serverNonce: string }> {
+export async function helloOnly(
+  port: number,
+  options: TabOptions = {},
+): Promise<{ tab: FakeTab; clientNonce: string; serverNonce: string; challenge: Extract<ConnectorFrame, { type: 'challenge' }> }> {
   const tab = await connectTab(port, options)
   const clientNonce = randomBytes(16).toString('hex')
   tab.send({ type: 'hello', v: AGENT_PROTOCOL, app: 'pico', appVersion: '2.1.0', nonce: clientNonce })
   const challenge = await tab.next()
   if (challenge.type !== 'challenge') throw new Error('no challenge')
-  return { tab, clientNonce, serverNonce: challenge.nonce }
+  return { tab, clientNonce, serverNonce: challenge.nonce, challenge }
 }
 
 export { encodeFrame }

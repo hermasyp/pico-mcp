@@ -259,7 +259,7 @@ describe('calls', () => {
     }
   })
 
-  it('gives up when the tab does not answer, and ignores the answer if it comes late', async () => {
+  it('gives up when the tab does not answer, tells it to drop the call, and ignores the answer if it comes late', async () => {
     const hub = await startHub({ callMs: 120 })
     const tab = await pairTab(hub.port, TOKEN)
     const pending = hub.call('pico_status', {})
@@ -267,6 +267,7 @@ describe('calls', () => {
     const outcome = await pending
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.error.code).toBe('timeout')
+    expect(await tab.next()).toEqual({ type: 'cancel', id: call.id })
     tab.reply(call.id, 'late')
     const next = hub.call('pico_status', {})
     const nextCall = await tab.nextCall()
@@ -310,6 +311,121 @@ describe('calls', () => {
     const odd = await pairTab(hub.port, TOKEN)
     odd.send({ type: 'hello', v: 1, app: 'pico', appVersion: '1', nonce: 'a'.repeat(32) })
     expect((await odd.closed).code).toBe(CLOSE.badRequest)
+  })
+})
+
+describe('a change that waits for the person', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('announces in its challenge that it can wait for the person to decide', async () => {
+    const hub = await startHub()
+    const { tab, challenge } = await helloOnly(hub.port)
+    expect(challenge.features).toEqual(['ask'])
+    tab.close()
+  })
+
+  it('keeps a call alive for the person once the page says it is waiting, and says so once', async () => {
+    const hub = await startHub({ callMs: 80, askMs: 800, askGraceMs: 100 })
+    const tab = await pairTab(hub.port, TOKEN)
+    let told = 0
+    const pending = hub.call('pico_add_endpoints', {}, 80, { onAwaiting: () => void (told += 1) })
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    tab.awaiting(call.id)
+    await sleep(250)
+    tab.reply(call.id, 'approved')
+    expect(await pending).toEqual({ ok: true, data: 'approved' })
+    expect(told).toBe(1)
+    tab.close()
+  })
+
+  it('does not wait longer for a call that the page has not said it is waiting on', async () => {
+    const hub = await startHub({ callMs: 80, askMs: 800, askGraceMs: 100 })
+    const tab = await pairTab(hub.port, TOKEN)
+    const pending = hub.call('pico_add_endpoints', {}, 80)
+    await tab.nextCall()
+    const outcome = await pending
+    expect(outcome).toMatchObject({ ok: false, error: { code: 'timeout' } })
+    tab.close()
+  })
+
+  it('gives up after the longer wait, answers timeout, and tells the page to drop the call', async () => {
+    const hub = await startHub({ callMs: 2_000, askMs: 150, askGraceMs: 50 })
+    const tab = await pairTab(hub.port, TOKEN)
+    const pending = hub.call('pico_add_endpoints', {})
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    const outcome = await pending
+    expect(outcome).toMatchObject({ ok: false, error: { code: 'timeout' } })
+    if (!outcome.ok) expect(outcome.error.message).toContain('person')
+    expect(await tab.next()).toEqual({ type: 'cancel', id: call.id })
+    tab.close()
+  })
+
+  it('counts the longer wait from the first notice, so a page cannot keep a call alive for ever', async () => {
+    const hub = await startHub({ callMs: 5_000, askMs: 200, askGraceMs: 100 })
+    const tab = await pairTab(hub.port, TOKEN)
+    const pending = hub.call('pico_add_endpoints', {})
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    await sleep(200)
+    tab.awaiting(call.id)
+    const settled = await Promise.race([pending.then(() => 'done'), sleep(220).then(() => 'still waiting')])
+    expect(settled).toBe('done')
+    tab.close()
+  })
+
+  it('tells the page when the agent stops waiting, and stops waiting itself', async () => {
+    const hub = await startHub()
+    const tab = await pairTab(hub.port, TOKEN)
+    const controller = new AbortController()
+    const pending = hub.call('pico_add_endpoints', {}, 5_000, { signal: controller.signal })
+    const call = await tab.nextCall()
+    controller.abort()
+    const outcome = await pending
+    expect(outcome).toMatchObject({ ok: false, error: { code: 'no-answer' } })
+    expect(await tab.next()).toEqual({ type: 'cancel', id: call.id })
+    // The answer that comes too late is ignored, and the connection carries on.
+    tab.reply(call.id, 'too late')
+    const next = hub.call('pico_status', {})
+    const nextCall = await tab.nextCall()
+    tab.reply(nextCall.id, 'fine')
+    expect(await next).toEqual({ ok: true, data: 'fine' })
+    tab.close()
+  })
+
+  it('does not send a call that was cancelled before it started', async () => {
+    const hub = await startHub()
+    const tab = await pairTab(hub.port, TOKEN)
+    const controller = new AbortController()
+    controller.abort()
+    expect(await hub.call('pico_add_endpoints', {}, 5_000, { signal: controller.signal })).toMatchObject({ ok: false, error: { code: 'no-answer' } })
+    const next = hub.call('pico_status', {})
+    const call = await tab.nextCall()
+    expect(call.tool).toBe('pico_status')
+    tab.reply(call.id, 1)
+    await next
+    tab.close()
+  })
+
+  it('closes a page that says it is waiting for a call that was never made, and ignores a notice for one that is over', async () => {
+    const hub = await startHub()
+    const stray = await pairTab(hub.port, TOKEN)
+    stray.awaiting(999)
+    expect((await stray.closed).code).toBe(CLOSE.badRequest)
+    await until(() => hub.state === 'waiting')
+
+    const tab = await pairTab(hub.port, TOKEN)
+    const first = hub.call('pico_status', {})
+    const call = await tab.nextCall()
+    tab.reply(call.id, 'done')
+    await first
+    tab.awaiting(call.id)
+    const second = hub.call('pico_status', {})
+    const nextCall = await tab.nextCall()
+    tab.reply(nextCall.id, 'still connected')
+    expect(await second).toEqual({ ok: true, data: 'still connected' })
+    tab.close()
   })
 })
 

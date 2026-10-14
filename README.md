@@ -100,7 +100,8 @@ expected to work. Safari does not allow a secure page to open `ws://127.0.0.1`, 
 - **A code that is proved, not sent.** A random 128-bit token is made on each start; the tab and the connector
   prove they know it with HMAC-SHA256 over fresh nonces, so it never travels.
 - **Least privilege.** By default the agent sees only the project that is open; you tick more. A project you
-  did not share is never read, named or changed. A **Read only** switch refuses every change.
+  did not share is never read, named or changed. **Ask me first** holds every change until you apply it in
+  Pico; a **Read only** switch refuses every change.
 - **Everything is restorable.** Pico keeps a restore point before the first change of a burst of edits, and one
   Undo message takes the whole burst back, exactly or not at all.
 - **Nothing runs.** The tools read and edit a contract. They do not execute requests, read files or open

@@ -4,6 +4,8 @@ import {
   DEFAULT_PORT,
   LIMITS,
   PORT_SPAN,
+  FEATURES,
+  TIMING,
   encodeFrame,
   formatPairing,
   isNonce,
@@ -217,6 +219,12 @@ describe('frames from the page', () => {
     for (const text of bad) expect(parseBrowserFrame(text), text).toBeNull()
   })
 
+  it('accepts a page saying it is waiting for the person to answer a call', () => {
+    expect(parseBrowserFrame(JSON.stringify({ type: 'awaiting-user', id: 7 }))).toEqual({ type: 'awaiting-user', id: 7 })
+    const bad = [{ type: 'awaiting-user' }, { type: 'awaiting-user', id: 0 }, { type: 'awaiting-user', id: 1.5 }, { type: 'awaiting-user', id: '3' }, { type: 'awaiting-user', id: -2 }]
+    for (const frame of bad) expect(parseBrowserFrame(JSON.stringify(frame)), JSON.stringify(frame)).toBeNull()
+  })
+
   it('refuses a frame bigger than the limit without reading it', () => {
     const huge = JSON.stringify({ type: 'result', id: 1, ok: true, data: 'x'.repeat(LIMITS.frameBytes) })
     expect(parseBrowserFrame(huge)).toBeNull()
@@ -261,6 +269,37 @@ describe('frames from the connector', () => {
     expect(parseConnectorFrame(JSON.stringify({ type: 'bye', reason: 'The agent closed.' }))).toEqual({ type: 'bye', reason: 'The agent closed.' })
   })
 
+  it('accepts a connector telling the page that a call is no longer wanted', () => {
+    expect(parseConnectorFrame(JSON.stringify({ type: 'cancel', id: 12 }))).toEqual({ type: 'cancel', id: 12 })
+    for (const frame of [{ type: 'cancel' }, { type: 'cancel', id: 0 }, { type: 'cancel', id: 'x' }, { type: 'cancel', id: 2.5 }]) {
+      expect(parseConnectorFrame(JSON.stringify(frame)), JSON.stringify(frame)).toBeNull()
+    }
+  })
+
+  describe('the abilities a connector announces in its challenge', () => {
+    const challenge = { type: 'challenge', v: 1, server: 'pico-mcp', serverVersion: '1.2.0', client: null, nonce, proof }
+
+    it('are read, and left out of the frame when there are none', () => {
+      expect(parseConnectorFrame(JSON.stringify({ ...challenge, features: ['ask'] }))).toEqual({ ...challenge, features: ['ask'] })
+      expect(parseConnectorFrame(JSON.stringify(challenge))).toEqual(challenge)
+      expect(FEATURES).toContain('ask')
+    })
+
+    it('never make a connector unusable: a list that makes no sense is ignored, the challenge is still taken', () => {
+      for (const features of ['ask', 7, null, { ask: true }, [], [1, 2], ['UPPER'], ['has space'], ['x'.repeat(40)], [''], [['ask']]]) {
+        const parsed = parseConnectorFrame(JSON.stringify({ ...challenge, features }))
+        expect(parsed, JSON.stringify(features)).toEqual(challenge)
+      }
+    })
+
+    it('keep the names that are well formed, including ones this version does not know, and at most eight', () => {
+      expect(parseConnectorFrame(JSON.stringify({ ...challenge, features: ['ask', 'Bad Name', 'future-thing', 3] }))).toEqual({ ...challenge, features: ['ask', 'future-thing'] })
+      const many = Array.from({ length: 12 }, (_, index) => `ability-${index}`)
+      const parsed = parseConnectorFrame(JSON.stringify({ ...challenge, features: many })) as { features: string[] }
+      expect(parsed.features).toEqual(many.slice(0, 8))
+    })
+  })
+
   it('refuses what is malformed', () => {
     const bad = [
       'x',
@@ -281,6 +320,15 @@ describe('frames from the connector', () => {
   it('does not take a frame meant for the other side', () => {
     expect(parseConnectorFrame(JSON.stringify({ type: 'auth', proof }))).toBeNull()
     expect(parseBrowserFrame(JSON.stringify({ type: 'ready' }))).toBeNull()
+  })
+})
+
+describe('the time the person has', () => {
+  it('is five minutes to answer a change that waits for them, and a little longer before the connector gives up on a tab that went quiet', () => {
+    expect(TIMING.askMs).toBe(5 * 60_000)
+    expect(TIMING.askGraceMs).toBeGreaterThan(0)
+    expect(TIMING.askGraceMs).toBeLessThan(TIMING.askMs)
+    expect(TIMING.askMs).toBeGreaterThan(TIMING.callMs)
   })
 })
 

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { AGENT_PROMPTS, AGENT_TOOLS } from '../src/catalog'
 import { DEFAULT_ORIGINS, USAGE } from '../src/connector/config'
-import { CLOSE, DEFAULT_PORT, ERROR_CODES, LIMITS } from '../src/protocol'
+import { CLOSE, DEFAULT_PORT, ERROR_CODES, FEATURES, LIMITS, TIMING } from '../src/protocol'
 
 /*
  * docs/REFERENCE.md is what a person reads to set the connection up and what an agent's owner reads
@@ -47,7 +47,21 @@ describe('docs/REFERENCE.md', () => {
     for (const [name, code] of Object.entries(CLOSE)) if (name !== 'bye') expect(reference, `${name} ${code}`).toContain(String(code))
   })
 
+  it('describes how a change waits for the person: the modes, the abilities, the two frames and the time they have', () => {
+    for (const word of ['Ask me first', 'Can edit', 'Read only', 'awaiting-user', '`cancel`', '`features`']) expect(reference, word).toContain(word)
+    for (const feature of FEATURES) expect(reference, feature).toContain(`\`${feature}\``)
+    expect(reference).toContain(`${TIMING.askMs / 60_000} minutes`)
+    expect(reference).toContain(`${TIMING.askGraceMs / 1000} seconds`)
+    // The two codes are sent now, not reserved.
+    expect(reference).not.toContain('Reserved for a later way')
+    expect(reference).not.toContain('never sends them')
+  })
+
   it('is what the README sends people to', () => {
     expect(read('README.md')).toContain('docs/REFERENCE.md')
+  })
+
+  it('has the README say that each change can wait for the person', () => {
+    expect(read('README.md')).toContain('Ask me first')
   })
 })

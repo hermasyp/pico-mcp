@@ -17,10 +17,10 @@ interface Rig {
 
 const closers: Array<() => Promise<void>> = []
 
-async function rig(): Promise<Rig> {
+async function rig(over: { progressMs?: number } = {}): Promise<Rig> {
   const hub = new Hub({ port: 0, origins: [ORIGIN], token: TOKEN, serverVersion: '2.1.0', callMs: 1_000, getClient: () => ({ name: 'test-agent', version: '1.0.0' }) })
   await hub.listen()
-  const server = buildServer({ hub, config: { picoUrl: PICO_URL }, version: '2.1.0' })
+  const server = buildServer({ hub, config: { picoUrl: PICO_URL }, version: '2.1.0', ...over })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
   await server.connect(serverTransport)
   const client = new Client({ name: 'test-agent', version: '1.0.0' })
@@ -226,5 +226,73 @@ describe('the tools that go to the tab', () => {
     await new Promise((resolve) => setTimeout(resolve, 1_300))
     tab.reply(call.id, { data: { projectId: 'p' }, warnings: [] })
     expect((await pending).isError).toBeFalsy()
+  })
+})
+
+describe('a change that waits for the person', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  async function waitFor(condition: () => boolean, ms = 3_000): Promise<void> {
+    const deadline = Date.now() + ms
+    while (!condition() && Date.now() < deadline) await sleep(10)
+    expect(condition()).toBe(true)
+  }
+  const add = { name: 'pico_add_endpoints', arguments: { endpoints: [{ name: 'A', method: 'GET', path: '/a' }] } }
+
+  it('tells the agent, with a progress notice now and then, that Pico waits for the person, and stops when the answer comes', async () => {
+    const { client, pair } = await rig({ progressMs: 40 })
+    const tab = await pair()
+    const notices: Array<{ progress: number; message?: string }> = []
+    const pending = client.callTool(add, { onprogress: (progress) => void notices.push(progress) })
+    const call = await tab.nextCall()
+    await sleep(120)
+    expect(notices, 'nothing is said while the tab is only working').toHaveLength(0)
+    tab.awaiting(call.id)
+    await waitFor(() => notices.length >= 3)
+    expect(notices[0].message).toContain('approve')
+    expect(notices[0].message).toContain('Pico')
+    const counts = notices.map((notice) => notice.progress)
+    expect(counts).toEqual([...counts].sort((a, b) => a - b))
+    expect(new Set(counts).size).toBe(counts.length)
+    tab.reply(call.id, { data: { added: 1 }, warnings: [] })
+    expect((await pending).isError).toBeFalsy()
+    const seen = notices.length
+    await sleep(150)
+    expect(notices.length, 'no more notices once the call is over').toBe(seen)
+  })
+
+  it('works for an agent that did not ask for progress notices', async () => {
+    const { client, pair } = await rig({ progressMs: 40 })
+    const tab = await pair()
+    const pending = client.callTool(add)
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    await sleep(120)
+    tab.reply(call.id, { data: { added: 1 }, warnings: [] })
+    expect((await pending).isError).toBeFalsy()
+  })
+
+  it('gives the person\u2019s refusal to the agent as an error it can act on', async () => {
+    const { client, pair } = await rig()
+    const tab = await pair()
+    const pending = client.callTool(add)
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    tab.fail(call.id, { code: 'declined', message: 'The person declined this change. Nothing was changed.', hint: 'Do not send it again; ask what they want.' })
+    const result = await pending
+    expect(result.isError).toBe(true)
+    expect(textOf(result as never)).toContain('Error (declined)')
+    expect(textOf(result as never)).toContain('Hint: Do not send it again')
+  })
+
+  it('tells the tab to drop the call when the agent stops waiting', async () => {
+    const { client, pair } = await rig()
+    const tab = await pair()
+    const controller = new AbortController()
+    const pending = client.callTool(add, { signal: controller.signal })
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    controller.abort()
+    await expect(pending).rejects.toBeDefined()
+    expect(await tab.next()).toEqual({ type: 'cancel', id: call.id })
   })
 })
