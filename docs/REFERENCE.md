@@ -218,7 +218,7 @@ An error carries a code, a message, sometimes the `path` of the argument and a `
 | `not-found` | There is no such project or endpoint, or it is not shared. The message lists the valid ones. |
 | `not-editable` | This tab cannot save right now (not the editing tab, or storage is stuck). Reading still works. |
 | `read-only` | The person limited the connection to reading. |
-| `conflict` | The person changed those projects after the edit, so taking it back would lose their work. Also: Pico already holds as many proposals as it will wait on, so wait for the person before sending more. |
+| `conflict` | The person changed those projects after the edit, so taking it back would lose their work. Also: Pico already holds as many proposals as it will wait on, so wait for the person before sending more; or the person changed what you may do while the change waited, so it was not made and may be sent again. |
 | `too-large` | The answer would be too long, or a message too large to send. |
 | `unknown-tool` | The tool does not exist, or belongs to the other side. |
 | `not-connected` | No Pico tab is connected: call `pico_connect` and show the code. |
