@@ -5,7 +5,7 @@ All notable changes to Pico MCP are recorded here, following
 The wire protocol has a version of its own (`AGENT_PROTOCOL`, now 1): a connector and a Pico tab that speak
 different versions refuse each other with a message that says so.
 
-## [1.2.0] - 2026-10-14
+## [1.2.0] - 2026-10-15
 
 A third way to work with an agent: **Ask me first**. The person sees what a change would do and applies or
 declines it in Pico. It needs Pico 2.3.0 or later. The wire protocol is unchanged (1): everything below is
