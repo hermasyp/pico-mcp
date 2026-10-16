@@ -12,6 +12,8 @@ for it. Say what you found, how to reproduce it, and which version (`pico-mcp --
 ## What is in scope
 
 - The connector (`src/connector/`): who can connect to it, what it forwards, what it prints.
+- What it reads (`src/connector/files.ts`, `traffic.ts`): the files it may open with `--root`, such as a path
+  that gets out of the folder, and a secret in a recording that is not hidden although it should have been.
 - The wire protocol (`src/protocol.ts`): the handshake, the proofs, the frame limits.
 - The tool catalog (`src/catalog.ts`): what an agent is told and what it may ask for.
 

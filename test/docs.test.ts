@@ -41,7 +41,7 @@ describe('docs/REFERENCE.md', () => {
   })
 
   it('states the limits the code enforces', () => {
-    const limits = [LIMITS.endpointsPerCall, LIMITS.opsPerCall, LIMITS.responsesPerEndpoint, LIMITS.fieldsPerCall, LIMITS.fieldDepth, LIMITS.textChars, LIMITS.nameChars, LIMITS.resultChars]
+    const limits = [LIMITS.endpointsPerCall, LIMITS.opsPerCall, LIMITS.responsesPerEndpoint, LIMITS.fieldsPerCall, LIMITS.fieldDepth, LIMITS.textChars, LIMITS.nameChars, LIMITS.resultChars, LIMITS.imageBytes, LIMITS.imageSide, LIMITS.imagePixels, LIMITS.trafficBytes, LIMITS.trafficEntries, LIMITS.trafficBodyChars]
     for (const value of limits) expect(reference, String(value)).toMatch(new RegExp(`\\b${value.toLocaleString('en-US').replace(/,/g, ',?')}\\b`))
     expect(reference).toContain(`${LIMITS.frameBytes / (1024 * 1024)} MiB`)
     for (const [name, code] of Object.entries(CLOSE)) if (name !== 'bye') expect(reference, `${name} ${code}`).toContain(String(code))

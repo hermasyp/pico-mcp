@@ -61,9 +61,23 @@ describe('the connector', () => {
     for (const file of sources) {
       for (const specifier of importsOf(file)) {
         if (!specifier.startsWith('.')) continue
-        const ok = specifier.startsWith('./') || specifier === '../protocol' || specifier === '../catalog'
+        const ok = specifier.startsWith('./') || specifier === '../protocol' || specifier === '../catalog' || specifier === '../vocabulary'
         expect(ok, `${file} imports ${specifier}`).toBe(true)
       }
+    }
+  })
+
+  it('reads files in one place only, and turns recorded traffic into endpoints without touching anything', () => {
+    // files.ts is where the rules for what may be read live (files.test.ts), so no other file may open a file.
+    for (const file of sources) {
+      const code = withoutComments(source(file))
+      const opens = /\bfrom\s+['"](?:node:)?fs(?:\/promises)?['"]|\brequire\(\s*['"](?:node:)?fs|\bimport\(\s*['"](?:node:)?fs/.test(code)
+      expect(opens, `${file} imports the file system`).toBe(path.basename(file) === 'files.ts')
+    }
+    // The parsers are pure: text in, endpoints out, so that nothing a recording says can reach the disk or the network.
+    for (const file of ['src/connector/traffic.ts']) {
+      for (const specifier of importsOf(file)) expect(specifier.startsWith('.'), `${file} imports ${specifier}`).toBe(true)
+      expect(withoutComments(source(file)), file).not.toMatch(/\b(?:process|Buffer|require|XMLHttpRequest|WebSocket|eval)\b|\bfetch\s*\(|new Function/)
     }
   })
 

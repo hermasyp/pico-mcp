@@ -8,6 +8,8 @@ Let an AI agent such as **Claude Code, Codex, OpenCode, Claude Desktop or Cursor
 
 - turn a **design** (a screenshot you give it) into endpoints, using its own eyes;
 - turn **existing code** (routes, DTOs, annotations) into endpoints, or write OpenAPI and import it;
+- turn a **recording** of real requests (a HAR file from the browser's network tab, or curl commands) into
+  endpoints, with tokens and passwords hidden, and put a **design picture** into an endpoint from a file;
 - **edit the contract you have open**: "fix this endpoint", "add the error responses", "rename these";
 - read the contract back (as OpenAPI, Markdown, a Pico file, or example payloads) to write tests,
   fixtures and client types;
@@ -105,6 +107,12 @@ away, rather than Codex's time-out (an older Codex may give a call less, and the
 keep it at `15000` or more: OpenCode gives up on a tool that has been silent for that many milliseconds, and *Ask me first*
 is silent for up to 10 seconds between its progress notices.
 
+**Pictures and recordings (optional).** For the agent to hand Pico a design picture or a recording (a HAR file) from a file, start the
+connector with the one folder it may read: add `--root` and the folder's absolute path after the path of
+`pico-mcp.mjs`, in any of the settings above, for example
+`claude mcp add pico -- node /absolute/path/to/pico-mcp.mjs --root /Users/you/design`. Without it the connector
+reads no file at all. See [Pictures and recorded traffic](docs/REFERENCE.md#pictures-and-recorded-traffic).
+
 Restart the agent so that it starts the connector. The Claude Desktop and Cursor snippets follow each
 product's documentation. The connector itself is tested with the official MCP SDK client over stdio, and it was
 also started and used by the real Codex CLI and OpenCode (see [docs/REFERENCE.md](docs/REFERENCE.md#verification)).
@@ -145,8 +153,9 @@ expected to work. Safari does not allow a secure page to open `ws://127.0.0.1`, 
   Pico; a **Read only** switch refuses every change.
 - **Everything is restorable.** Pico keeps a restore point before the first change of a burst of edits, and one
   Undo message takes the whole burst back, exactly or not at all.
-- **Nothing runs.** The tools read and edit a contract. They do not execute requests, read files or open
-  connections.
+- **Nothing runs.** The tools read and edit a contract. They do not execute requests or open connections.
+  The connector reads a file only if you started it with `--root <folder>`, and then only a picture or a recording
+  inside that folder that the agent names; what it reads goes to the Pico tab and nowhere else.
 
 The details, the limits and what this does **not** protect against are in
 [docs/REFERENCE.md](docs/REFERENCE.md#security). To report a vulnerability, see [SECURITY.md](SECURITY.md).

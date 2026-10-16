@@ -1,6 +1,6 @@
 {
   "name": "pico-mcp",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "MCP server that lets an AI agent (Claude Code, Codex, OpenCode, Claude Desktop, Cursor) read and edit API contracts in Pico. It runs on your machine and the Pico tab connects to it over a local WebSocket.",
   "keywords": [
     "mcp",

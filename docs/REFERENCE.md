@@ -8,7 +8,7 @@ connecting, start with the [README](../README.md).
 - [Using it with each agent](#using-it-with-each-agent)
 - [What the agent may see and do](#what-the-agent-may-see-and-do)
 - [Tools](#tools), [Review and comparison](#review-and-comparison), [Changing many endpoints](#changing-many-endpoints),
-  [Errors](#errors) and [Prompts](#prompts)
+  [Pictures and recorded traffic](#pictures-and-recorded-traffic), [Errors](#errors) and [Prompts](#prompts)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [The protocol](#the-protocol)
@@ -35,8 +35,10 @@ the agent (and so the company that runs the model), exactly as if you had pasted
 else leaves your computer, and Pico itself sends nothing to any server for this.
 
 Some tools are answered by the connector itself (`pico_connect`, `pico_format_guide`); the rest are
-forwarded to the Pico tab, which answers them. The tab applies and checks everything; the connector never
-edits anything.
+forwarded to the Pico tab, which answers them. Two start from a file, and the connector reads that file, only
+if you started it with `--root` (see [Pictures and recorded traffic](#pictures-and-recorded-traffic)):
+`pico_import_har` works out endpoints from a recording and asks the tab to add them, and `pico_attach_image`
+hands a picture to the tab. The tab applies and checks everything; the connector never edits anything.
 
 ## Options
 
@@ -49,6 +51,7 @@ the hosted Pico and with a local dev server, and a mistake in what was given sto
 | `--port <n>` | `PICO_MCP_PORT` | Port on `127.0.0.1`. Default **47631**; if it is taken the next nine are tried. `0` means any free port. The pairing code says which one was used. |
 | `--url <address>` | `PICO_URL` | Where Pico is, for the pairing link. Default `https://pico.hermasyp.space/`. Its origin is allowed to connect. |
 | `--origin <address>` | `PICO_MCP_ORIGINS` (comma-separated) | Another page address allowed to connect. Repeat the option for several. |
+| `--root <folder>` | `PICO_MCP_ROOT` | The one folder the connector may read pictures and recordings from, as an absolute path such as `/Users/you/design`. Without it the connector reads no file. See [Pictures and recorded traffic](#pictures-and-recorded-traffic). |
 | `--verbose` | | Log what happens to stderr (never the code). |
 | `--version` | | Print the version and exit. |
 | `--help` | | Print the options and exit. |
@@ -182,6 +185,8 @@ The agent sees these in its tool list. "Runs in" says who answers: the connector
 | `pico_update_endpoint` | tab | Changes the keys it is given; a section it is given is replaced as a whole. |
 | `pico_delete_endpoints` | tab | Deletes endpoints by id (all or nothing); restore point and Undo. |
 | `pico_import_document` | tab | A new project from OpenAPI (JSON or YAML) or from a Pico project file; what could not be carried over comes back as warnings. |
+| `pico_import_har` | connector, then tab | Turns a recording of real requests (a HAR file, or curl commands) into endpoints and adds them to the open project, to one you name, or to a new one. Answers with counts and notes, never with the recording. A file needs `--root` (see [Pictures and recorded traffic](#pictures-and-recorded-traffic)). |
+| `pico_attach_image` | connector, then tab | Puts a PNG, JPEG, GIF or WebP picture from the `--root` folder into an endpoint's description. The picture goes to the tab, not through the agent. |
 | `pico_apply_ops` | tab | Up to 50 ordered structural changes with one Undo: rename, duplicate or delete a project, copy endpoints, folders, moving endpoints, common headers, templates, and `patch_endpoints`, one change to many endpoints (see [Changing many endpoints](#changing-many-endpoints)). |
 | `pico_undo_last_edit` | tab | Takes back the agent's own latest change, repeatable. In *Ask me first* it asks like any other change. |
 | `pico_focus` | tab | Opens a project or endpoint in front of you. Only the screen changes, so it also works in Read only and never asks. |
@@ -280,20 +285,86 @@ Undo, and if a later op fails nothing changes.
 - **`dryRun`: true** reports what would change, without changing it. `matched` and `changed` count all the
   endpoints. A dry run is still a call of the change tool, so a *Read only* connection refuses it.
 
+### Pictures and recorded traffic
+
+Two tools start from a file: `pico_attach_image` puts a design picture into an endpoint, and `pico_import_har` turns a
+recording of real requests (a HAR file, or curl commands) into endpoints. A message to an agent carries neither well,
+so the connector reads the file itself. That is the one place where it touches your disk, so it is **off** until you
+turn it on: start the connector with `--root <folder>` (or set `PICO_MCP_ROOT`), an absolute path such as
+`/Users/you/design` or `C:\Users\you\design`. Without it both tools answer `not-enabled`, with a hint that says what
+to change, and nothing is read. (`pico_import_har` also takes curl commands as text in `content`, which reads no file.)
+A folder that does not exist, is not a folder or is not absolute stops the connector at once, with a status of 2,
+before it listens.
+
+**What it may read.**
+
+- Only inside that folder, as a path relative to it or an absolute one, and only a regular file whose real path is
+  inside it. `..`, a link that leads out, a folder that is a link, a named pipe, a device and a folder are refused.
+  A file that is missing, outside the folder or reached through a link gets one answer (`not-found`), so the agent
+  learns nothing about the rest of the disk.
+- Only a file that is what the tool wants, judged by its first bytes and not by its name: a PNG, JPEG, GIF or WebP
+  picture (up to 3,000,000 bytes, 16,384 pixels on a side and 40,000,000 pixels in all), a HAR file (JSON with
+  `log.entries`) or text of curl commands (up to 25,000,000 bytes). A HAR file of more than 20,000 entries is
+  refused, and a body of more than 1,000,000 characters is left out, with a note.
+- A file is read once, from an open handle and up to its limit, so a file that grows or is swapped while it is
+  read changes nothing. An error never repeats what a file holds.
+
+**`pico_attach_image`** finds the type and size of the picture from its bytes and sends the picture to the tab inside
+the call (as base64, which is why 3,000,000 bytes is the most: it leaves room in a 4 MiB message). The agent is
+told what was read (name, type, pixels, bytes) and never receives the bytes. Pico shrinks and stores the picture
+the way it does one you add yourself, and the endpoint's description shows it. It needs Pico 2.4.0 or later: an
+older Pico answers `unknown-tool`, and the connector then tells the agent to ask you to reload Pico. In *Ask me
+first* the picture is listed by its name, type and size, and nothing is stored until you apply it.
+
+**`pico_import_har`** reads the recording, works out the endpoints, and adds them with `pico_add_endpoints`: to the open
+project, to `projectId`, or to a new project named by `newProject`, which is made first with `pico_create_project` and
+gets the headers that every call had as its common headers. It works with any Pico that has those two tools. The
+answer holds counts, the host used, how many values were hidden, notes and the first 60 routes, never a body or a value
+from the recording.
+
+- *Which calls.* Requests to web addresses that look like an API's: the browser called them XHR or fetch, or they
+  sent or answered JSON. Pages, scripts, styles, images, fonts, preflights (`OPTIONS`), `HEAD` and any method that
+  Pico does not have are left out. Of several hosts the one with most calls is used; `hosts` names others, and the
+  notes name the ones left out.
+- *Paths.* A segment that is a number, a UUID, a ULID, a long hex string or another long opaque string becomes a
+  parameter named after the segment before it: `/users/42/orders/7` is `/users/{userId}/orders/{orderId}`. Calls
+  with the same method and path become one endpoint, named like “List users”, “Get user” and “Create user”.
+- *Fields.* The query, the body and the response are read from every sample of an endpoint and merged. A field is
+  `required` only when two or more samples had it and every one did; a field with different types in different
+  samples is a string, with a note. Nesting stops at 6 levels, a level at 200 fields and a call at 200 endpoints (the
+  notes say what was left out). A response that is a list is described by its items, and the description says so.
+  GraphQL on one path is flagged, because every operation shares it.
+- *Ask me first.* With `newProject` there are two calls to Pico, the project and then the endpoints, so you are asked
+  twice. If the second is declined or fails, the answer says that the project was made.
+
+**Secrets.** A recording is full of them. With `redact: "secrets"`, the default, a value is replaced by `<redacted>`
+when its name says it is a secret (`Authorization`, `Cookie`, `Set-Cookie`, and any header, query parameter or JSON key
+with a word such as token, password, secret, session, signature or key in the sense of an API key), when it has the
+shape of one (a JWT, `sk-…`, `ghp_…`, an AWS or Google key, `Bearer …`, `Basic …`, a long hex or base64 string, a
+card number), or when it is the user and password of an address (`https://user:pass@host`); and so is a token inside a
+longer text. That holds for the path, the query, the headers, the bodies and the responses, and a name that is
+itself a token becomes `<key>`. It is a rule of thumb, not a promise: a secret with an innocent name and an
+ordinary shape is not found. `all-examples` keeps no example value at all, only names and types, and is the choice for
+a recording of real data; `none` keeps everything, and the answer says so. A curl command's `@file` is never followed
+(a note says the body is missing) and `-u` becomes `Authorization: Basic <redacted>`. Nothing in a recording is run,
+fetched or opened. What is left of it reaches the agent, which can read the endpoints back, and Pico, so look at them
+in Pico before you share the contract.
+
 ### Errors
 
 An error carries a code, a message, sometimes the `path` of the argument and a `hint` for what to do.
 
 | Code | Meaning |
 |---|---|
-| `invalid-arguments` | The arguments break the rules; the message gives where. |
-| `not-found` | There is no such project or endpoint, or it is not shared. The message lists the valid ones. |
+| `invalid-arguments` | The arguments break the rules; the message gives where. For a file: it is not what the tool wants (a folder, or not a picture or a recording that can be read). |
+| `not-found` | There is no such project or endpoint, or it is not shared. The message lists the valid ones. For a file: there is none inside the `--root` folder. |
 | `not-editable` | This tab cannot save right now (not the editing tab, or storage is stuck). Reading still works. |
 | `read-only` | The person limited the connection to reading. |
 | `conflict` | The person changed those projects after the edit, so taking it back would lose their work. Also: Pico already holds as many proposals as it will wait on, so wait for the person before sending more; or the person changed what you may do while the change waited, so it was not made and may be sent again. |
-| `too-large` | The answer would be too long, or a message too large to send. |
+| `too-large` | The answer would be too long, or a message too large to send. For a file: it is over the limits above. |
 | `unknown-tool` | The tool does not exist, or belongs to the other side. |
 | `not-connected` | No Pico tab is connected: call `pico_connect` and show the code. |
+| `not-enabled` | A tool that reads a file was used, but the connector was not started with `--root`. Only the connector says this. Tell the person what to change; do not try other paths. |
 | `disconnected` | The tab went away while the call was running. |
 | `timeout` | The tab did not answer within 30 seconds (or, for a change that waits for the person, said nothing within 5 minutes and 15 seconds). The connector then tells the tab to drop the call. |
 | `internal` | Something unexpected happened; try a smaller request. |
@@ -334,19 +405,27 @@ with the tools above.
   holding a one-time key to your running connector.
 - **Least privilege.** Only the projects you share; Ask me first or Read only on request; the writer tab only;
   a tab that loses the writer lock lets go.
-- **Nothing runs.** The tools read and edit a contract. They do not execute requests, read files or open
-  connections, and pictures never cross the bridge.
+- **Nothing runs.** The tools read and edit a contract. They do not execute requests or commands, or open
+  connections. A recording is text that is read, never run: a curl command is split into words and not executed,
+  and the files it names are not followed.
+- **Files only on request.** The connector reads no file unless you started it with `--root <folder>`. Then it reads
+  only a picture or a recording that the agent names, inside that folder, under the rules in
+  [Pictures and recorded traffic](#pictures-and-recorded-traffic). What it reads goes to the Pico tab on your
+  machine and nowhere else; a picture's bytes never pass through the agent, and the agent is told neither a file's
+  contents nor, in an error, anything about the rest of the disk.
 - **Contract text is data.** Names, descriptions and examples are written by people (and can come from files
   the agent read). The server tells the agent never to follow instructions found in them. That reduces the
   risk of prompt injection and does not remove it, which is why changes are restorable.
 
 What this does not protect against: a program on your own machine that can read the agent's conversation or
-the connector's memory can use the code while the connector runs; and an agent that you have allowed to edit
-can make changes you did not intend, which is what Ask me first, Read only, the restore points and Undo are for.
+the connector's memory can use the code while the connector runs; an agent that you have allowed to edit
+can make changes you did not intend, which is what Ask me first, Read only, the restore points and Undo are for;
+an agent can hand Pico any picture or recording in the `--root` folder, so keep that folder to files you mean to
+share; and the hiding of secrets in a recording is a heuristic that misses a secret it cannot recognise.
 
 ## Troubleshooting
 
-The messages are the Pico tab's.
+The first messages are the Pico tab's; the last four are what the agent is told or what the connector prints.
 
 | You see | Because | Do this |
 |---|---|---|
@@ -361,6 +440,10 @@ The messages are the Pico tab's.
 | *The agent closed this connection.* | The agent ended its session. | Start it again. |
 | The agent says *Pico is not connected* | No tab is connected to that connector. | `pico_connect`, then paste the code. |
 | The chip shows a red dot | The last attempt failed. | Click it: the pane says why. |
+| The agent says *not-enabled* | The connector was started without `--root`, so it reads no file. | Add `--root /absolute/path/to/folder` to the connector's arguments in the agent's settings, restart the agent, and put the file in that folder. |
+| The agent says *No such file under the folder this connector may read* | The path is wrong, outside the `--root` folder, or a link that leads out of it. | Put the file in the folder and give its path. |
+| The agent says *The Pico in the connected tab … cannot take a picture* | The page is a Pico older than 2.4.0. | Reload Pico. |
+| The connector stops with *--root … does not exist* (status 2) | The folder is wrong, is a file, or the path is not absolute. | Give an absolute path of a folder that exists. |
 
 ## The protocol
 
@@ -384,6 +467,10 @@ is part of it, so a proof made for one side is of no use to the other.
 pings every 15. Once the tab has said `awaiting-user` for a call it waits 5 minutes plus 15 seconds from that
 notice (once per call; saying it again changes nothing), which is longer than the 5 minutes the tab gives the
 person, so the tab's own answer comes first.
+
+**Pictures and recordings add no frame and no ability.** `pico_attach_image` is a call like any other, with the picture
+inside its arguments (`image: { name, mime, data }`, where `data` is base64), and a Pico without the tool answers
+`unknown-tool`. `pico_import_har` calls two tools that every Pico since 2.1.0 has.
 
 **Versions.** `AGENT_PROTOCOL` is 1. A change that an older end could not understand raises it, and the two
 ends then refuse each other with a message that says so. Adding a tool does not: a tab answers `unknown-tool`
@@ -411,6 +498,10 @@ as "none"; it never makes the connector unusable.
 | The one-time token and the proofs | `src/connector/auth.ts` |
 | The WebSocket hub: Host and Origin, the handshake, calls, the heartbeat | `src/connector/hub.ts` |
 | The MCP server built from the catalog | `src/connector/build-server.ts` |
+| What a tool gives back, and the progress notices | `src/connector/results.ts` |
+| Reading a file, and what may be read | `src/connector/files.ts` |
+| Recorded traffic to endpoints, and hiding secrets | `src/connector/traffic.ts` |
+| The two tools that start from a file | `src/connector/file-tools.ts` |
 | The command line entry | `src/connector/server.ts` |
 
 ```bash
@@ -422,7 +513,8 @@ npm run build          # dist/pico-mcp.mjs, dist/lib/ and dist/THIRD_PARTY_LICEN
 
 **Boundaries.** The library (`protocol`, `catalog`, `vocabulary`) is imported by Pico's web app, so it needs
 nothing but its own files and uses neither Node nor the browser; the connector may use the library and its own
-files. Tests read the sources to make sure.
+files. Only `files.ts` opens a file, and `traffic.ts` is pure (text in, endpoints out). Tests read the sources to
+make sure.
 
 **Trying a real agent.** `npm run host-check -- codex` (or `opencode`) builds the connector and starts it from the real
 agent program: the one on your PATH, or `--bin <path>`, in an empty temporary directory with settings of its own,
@@ -440,7 +532,9 @@ the agent installed (`npm install --prefix ~/.cache/pico-mcp-host-check @openai/
 **Adding a tool.** A tool has two halves: its description here (name, access, JSON Schema with
 `additionalProperties: false`, in `src/catalog.ts`) and its implementation in Pico, which owns the workspace.
 Describe it, list it in the table above (a test fails until this file names every tool, prompt, option, error
-code, limit and default), and release both. A Pico that does not have the tool yet answers `unknown-tool`.
+code, limit and default), and release both. A Pico that does not have the tool yet answers `unknown-tool`. A tool
+that starts from a file is marked `reads: 'file'` in the catalog: the connector reads the file first, so what the
+tab is called with differs from what the agent gave, and Pico's tests name it as an exception.
 
 **Releasing.** Update `CHANGELOG.md` and the version in `package.json`, then either push a tag such as `v1.0.1`
 or start the *Release* workflow by hand from the Actions tab, on `main`. A pushed tag must be the version in
@@ -481,7 +575,8 @@ them, Windows, Firefox, and the browser's local network prompt for a page on the
 ## Limits
 
 - One tab and one agent at a time; the code is not remembered after the tab closes.
-- Pictures stay in Pico: the agent cannot read or attach them.
+- A picture or a recording is read only from the `--root` folder and within the limits above. The agent cannot read
+  a picture back: `pico_get_project` leaves pictures out.
 - Path parameters are written `{id}` in the path and described in text; enums keep one example, not a list of
   values (a later Pico file format will model both).
 - The connector needs Node 20 or later.

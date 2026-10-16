@@ -32,7 +32,7 @@ describe('the library', () => {
     const vocabulary = await load('vocabulary')
     expect(protocol.AGENT_PROTOCOL).toBe(1)
     expect(typeof protocol.parseBrowserFrame).toBe('function')
-    expect((catalog.AGENT_TOOLS as unknown[]).length).toBe(16)
+    expect((catalog.AGENT_TOOLS as unknown[]).length).toBe(18)
     expect(vocabulary.HTTP_METHODS).toEqual(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   })
 

@@ -1,8 +1,10 @@
 import { McpServer, fromJsonSchema, type ServerContext } from '@modelcontextprotocol/server'
-import { AGENT_INSTRUCTIONS, AGENT_PROMPTS, AGENT_TOOLS, formatGuide, type AgentPromptDef, type AgentToolDef } from '../catalog'
-import { formatPairing, pairingLink, type ToolError } from '../protocol'
+import { AGENT_INSTRUCTIONS, AGENT_PROMPTS, AGENT_TOOLS, formatGuide, type AgentPromptDef } from '../catalog'
+import { formatPairing, pairingLink } from '../protocol'
 import type { Config } from './config'
+import { attachImage, importTraffic } from './file-tools'
 import type { Hub } from './hub'
+import { PROGRESS_MS, failure, progressNotices, success, text, type ToolResult } from './results'
 
 /*
  * The MCP server an agent talks to, made from the shared catalog: the same tool
@@ -14,70 +16,13 @@ import type { Hub } from './hub'
 export interface ServerDeps {
   hub: Hub
   config: Pick<Config, 'picoUrl'>
+  /** The real path of the folder the connector may read pictures and traffic files from, or null: it then reads none. */
+  root?: string | null
   version: string
   /** Told about the server once it exists, so the hub can name the agent in its handshake. */
   onServer?: (server: McpServer) => void
   /** How often the agent is told, while a change waits for the person to approve it. */
   progressMs?: number
-}
-
-/** A change that waits for the person can take minutes; an agent that asked for progress notices hears every so often that it is alive. */
-const PROGRESS_MS = 10_000
-const WAITING = 'Waiting for the person to approve this change in Pico.'
-
-/** Progress notices for one call, started when the tab says the call waits for the person. Nothing is sent to an agent that did not ask for them. */
-function progressNotices(context: ServerContext, every: number): { start(): void; stop(): void } {
-  const token = context.mcpReq._meta?.progressToken
-  let timer: ReturnType<typeof setInterval> | null = null
-  let count = 0
-  const send = (progressToken: string | number): void => {
-    count += 1
-    context.mcpReq.notify({ method: 'notifications/progress', params: { progressToken, progress: count, message: WAITING } }).catch(() => {})
-  }
-  return {
-    start() {
-      if (token === undefined || timer !== null) return
-      send(token)
-      timer = setInterval(() => send(token), every)
-      timer.unref()
-    },
-    stop() {
-      if (timer !== null) clearInterval(timer)
-      timer = null
-    },
-  }
-}
-
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: true }
-
-const text = (value: string): ToolResult => ({ content: [{ type: 'text', text: value }] })
-
-function failure(error: ToolError): ToolResult {
-  const lines = [`Error (${error.code}): ${error.message}`]
-  if (error.hint) lines.push(`Hint: ${error.hint}`)
-  return { content: [{ type: 'text', text: lines.join('\n') }], isError: true }
-}
-
-/** What the tab sends back for a tool: its data, and notes and a summary where there are any. */
-interface TabAnswer {
-  data?: unknown
-  warnings?: unknown
-  summary?: unknown
-}
-
-function success(tool: AgentToolDef, answer: unknown): ToolResult {
-  const reply = (answer !== null && typeof answer === 'object' ? answer : { data: answer }) as TabAnswer
-  const warnings = Array.isArray(reply.warnings) ? reply.warnings.filter((item): item is string => typeof item === 'string') : []
-  const summary = typeof reply.summary === 'string' ? reply.summary : undefined
-  const extra = { ...(summary ? { summary } : {}), ...(warnings.length > 0 ? { warnings } : {}) }
-
-  // An export is a file: give its text as it is, not squeezed into a JSON string.
-  const data = reply.data as Record<string, unknown> | undefined
-  if (tool.name === 'pico_export' && data && typeof data.text === 'string') {
-    const { text: file, ...about } = data
-    return { content: [{ type: 'text', text: JSON.stringify({ result: about, ...extra }) }, { type: 'text', text: file }] }
-  }
-  return text(JSON.stringify({ result: reply.data ?? null, ...extra }))
 }
 
 function connectTool(hub: Hub, config: Pick<Config, 'picoUrl'>): ToolResult {
@@ -104,7 +49,7 @@ function promptSchema(prompt: AgentPromptDef): Record<string, unknown> | undefin
   }
 }
 
-export function buildServer({ hub, config, version, onServer, progressMs = PROGRESS_MS }: ServerDeps): McpServer {
+export function buildServer({ hub, config, root = null, version, onServer, progressMs = PROGRESS_MS }: ServerDeps): McpServer {
   const server = new McpServer({ name: 'pico-mcp', version }, { instructions: AGENT_INSTRUCTIONS, capabilities: { tools: {}, prompts: {} } })
 
   for (const tool of AGENT_TOOLS) {
@@ -119,6 +64,8 @@ export function buildServer({ hub, config, version, onServer, progressMs = PROGR
       async (args: unknown, context: ServerContext): Promise<ToolResult> => {
         if (tool.name === 'pico_connect') return connectTool(hub, config)
         if (tool.name === 'pico_format_guide') return text(formatGuide())
+        if (tool.name === 'pico_import_har') return importTraffic(tool, args, context, { hub, root, progressMs })
+        if (tool.name === 'pico_attach_image') return attachImage(tool, args, context, { hub, root, progressMs })
         // Imports and big batches take the tab longer than a read does.
         const slow = tool.name === 'pico_import_document' || tool.name === 'pico_add_endpoints' || tool.name === 'pico_apply_ops'
         const notices = progressNotices(context, progressMs)

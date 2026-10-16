@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -10,6 +10,7 @@ import { AGENT_TOOLS } from '../src/catalog'
 import { parsePairing } from '../src/protocol'
 import { buildConnector } from '../scripts/build.mjs'
 import { ORIGIN, pairTab } from './helpers/fake-tab'
+import { png } from './helpers/pictures'
 
 const run = promisify(execFile)
 
@@ -102,4 +103,91 @@ describe('the built connector', () => {
     expect((error as { stdout: string }).stdout).toBe('')
     expect((error as { stderr: string }).stderr).toContain('not a port number')
   })
+
+  it('stops at once, with a status of 2 and before it listens, when --root is not a folder it can use', async () => {
+    const file = path.join(dir, 'a-file.txt')
+    await writeFile(file, 'not a folder')
+    for (const [root, message] of [
+      [path.join(dir, 'does-not-exist'), 'does not exist'],
+      [file, 'is not a folder'],
+      ['relative/folder', 'absolute path'],
+    ] as const) {
+      const error = await run(process.execPath, [bundle, '--port', '0', '--root', root]).catch((failure: { code: number; stdout: string; stderr: string }) => failure)
+      expect((error as { code: number }).code, root).toBe(2)
+      expect((error as { stdout: string }).stdout, root).toBe('')
+      expect((error as { stderr: string }).stderr, root).toContain(message)
+      expect((error as { stderr: string }).stderr, root).not.toContain('ready on')
+    }
+  })
+})
+
+describe('the built connector and the files it may read', () => {
+  const textOf = (result: unknown): string => ((result as { content: Array<{ text: string }> }).content[0] as { text: string }).text
+
+  async function start(args: string[]) {
+    const transport = new StdioClientTransport({ command: process.execPath, args: [bundle, '--port', '0', '--origin', ORIGIN, ...args], stderr: 'pipe' })
+    const stderr: string[] = []
+    transport.stderr?.on('data', (chunk) => stderr.push(String(chunk)))
+    const client = new Client({ name: 'process-test', version: '1.0.0' })
+    await client.connect(transport)
+    const info = JSON.parse(textOf(await client.callTool({ name: 'pico_connect', arguments: {} })))
+    const pairing = parsePairing(info.pairingCode)!
+    const tab = await pairTab(pairing.port, pairing.token)
+    return { client, tab, stderr, token: pairing.token }
+  }
+
+  it('hands a picture and a recording from the folder it was started with to the tab, and reads nothing outside it', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'pico-mcp-root-'))
+    try {
+      await mkdir(path.join(base, 'design'))
+      await mkdir(path.join(base, 'elsewhere'))
+      const root = await realpath(path.join(base, 'design'))
+      const bytes = Buffer.concat([png(640, 480), Buffer.from('rest-of-the-picture')])
+      await writeFile(path.join(root, 'login.png'), bytes)
+      await writeFile(path.join(base, 'elsewhere', 'other.png'), png(8, 8))
+      await writeFile(path.join(root, 'shop.har'), JSON.stringify({ log: { entries: [{ _resourceType: 'xhr', request: { method: 'GET', url: 'https://api.shop.test/v1/users/7', headers: [{ name: 'Authorization', value: 'Bearer abcdefghijklmnop1234' }] }, response: { status: 200, content: { mimeType: 'application/json', text: '{"id":7,"name":"Ann"}' } } }] } }))
+
+      const { client, tab, stderr, token } = await start(['--root', root])
+      expect(stderr.join('')).toContain(`files: the agent may hand over pictures and recorded traffic from ${root}`)
+
+      const picture = client.callTool({ name: 'pico_attach_image', arguments: { endpointId: 'e1', path: 'login.png', alt: 'Sign in' } })
+      const attach = await tab.nextCall()
+      expect(attach.tool).toBe('pico_attach_image')
+      expect(attach.args).toEqual({ endpointId: 'e1', alt: 'Sign in', image: { name: 'login.png', mime: 'image/png', data: bytes.toString('base64') } })
+      tab.reply(attach.id, { data: { attached: true }, warnings: [] })
+      expect(JSON.parse(textOf(await picture)).warnings[0]).toContain('Read login.png (image/png, 640 by 480 pixels')
+
+      const recording = client.callTool({ name: 'pico_import_har', arguments: { format: 'har', path: path.join(root, 'shop.har') } })
+      const add = await tab.nextCall()
+      expect(add.tool).toBe('pico_add_endpoints')
+      expect(JSON.stringify(add.args)).toContain('/v1/users/{userId}')
+      expect(JSON.stringify(add.args)).not.toContain('abcdefghijklmnop1234')
+      tab.reply(add.id, { data: { added: 1 }, warnings: [] })
+      expect((await recording).isError).toBeFalsy()
+
+      const outside = await client.callTool({ name: 'pico_attach_image', arguments: { endpointId: 'e1', path: '../elsewhere/other.png' } })
+      expect(outside.isError).toBe(true)
+      expect(textOf(outside)).toContain('not-found')
+      expect(stderr.join('')).not.toContain(token)
+
+      await client.close()
+      tab.close()
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('reads no file at all when it was started without --root, and says what to do', async () => {
+    const { client, tab, stderr } = await start([])
+    expect(stderr.join('')).toContain('files: off')
+    const result = await client.callTool({ name: 'pico_attach_image', arguments: { endpointId: 'e1', path: '/etc/hostname' } })
+    expect(result.isError).toBe(true)
+    expect(textOf(result)).toContain('not-enabled')
+    expect(textOf(result)).toContain('--root')
+    const har = await client.callTool({ name: 'pico_import_har', arguments: { format: 'har', path: 'x.har' } })
+    expect(textOf(har)).toContain('not-enabled')
+    expect(tab.received).toHaveLength(0)
+    await client.close()
+    tab.close()
+  }, 30_000)
 })

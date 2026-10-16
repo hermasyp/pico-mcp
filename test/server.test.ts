@@ -1,52 +1,9 @@
-import { Client, InMemoryTransport } from '@modelcontextprotocol/client'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AGENT_INSTRUCTIONS, AGENT_PROMPTS, AGENT_TOOLS, formatGuide } from '../src/catalog'
 import { formatPairing, parsePairing, pairingFromHash } from '../src/protocol'
-import { buildServer } from '../src/connector/build-server'
-import { Hub } from '../src/connector/hub'
-import { ORIGIN, pairTab, type FakeTab } from './helpers/fake-tab'
+import { PICO_URL, closeRigs, rig, textOf } from './helpers/rig'
 
-const TOKEN = '0123456789ABCDEFGHJKMNPQRS'
-const PICO_URL = 'https://pico.example/'
-
-interface Rig {
-  client: Client
-  hub: Hub
-  pair(): Promise<FakeTab>
-}
-
-const closers: Array<() => Promise<void>> = []
-
-async function rig(over: { progressMs?: number } = {}): Promise<Rig> {
-  const hub = new Hub({ port: 0, origins: [ORIGIN], token: TOKEN, serverVersion: '2.1.0', callMs: 1_000, getClient: () => ({ name: 'test-agent', version: '1.0.0' }) })
-  await hub.listen()
-  const server = buildServer({ hub, config: { picoUrl: PICO_URL }, version: '2.1.0', ...over })
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  await server.connect(serverTransport)
-  const client = new Client({ name: 'test-agent', version: '1.0.0' })
-  await client.connect(clientTransport)
-  const tabs: FakeTab[] = []
-  closers.push(async () => {
-    for (const tab of tabs) tab.close()
-    await client.close()
-    await hub.close()
-  })
-  return {
-    client,
-    hub,
-    pair: async () => {
-      const tab = await pairTab(hub.port, TOKEN)
-      tabs.push(tab)
-      return tab
-    },
-  }
-}
-
-afterEach(async () => {
-  await Promise.all(closers.splice(0).map((close) => close()))
-})
-
-const textOf = (result: { content: Array<{ type: string; text?: string }> }, index = 0): string => result.content[index].text as string
+afterEach(closeRigs)
 
 describe('what an agent sees of the connector', () => {
   it('lists exactly the tools of the catalog, with their schemas, titles and hints', async () => {
@@ -208,7 +165,8 @@ describe('the tools that go to the tab', () => {
       pico_apply_ops: { ops: [{ op: 'create_folder', name: 'F' }] },
       pico_add_endpoints: { endpoints: [{ name: 'A', method: 'GET', path: '/a' }] },
     }
-    for (const tool of AGENT_TOOLS.filter((item) => item.home !== 'connector')) {
+    // The tools that read a file first are not forwarded as they are given; file-tools.test.ts has them.
+    for (const tool of AGENT_TOOLS.filter((item) => item.home !== 'connector' && item.reads === undefined)) {
       const args = smallest[tool.name] ?? {}
       const pending = client.callTool({ name: tool.name, arguments: args })
       const call = await tab.nextCall()

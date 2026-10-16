@@ -31,6 +31,16 @@ export const LIMITS = {
   nameChars: 300,
   /** The text of one tool result. A bigger answer is refused with a hint to ask for less. */
   resultChars: 400_000,
+  /** A picture the connector reads for pico_attach_image. 3,000,000 bytes are 4,000,000 in base64, which leaves room in a frame. */
+  imageBytes: 3_000_000,
+  /** The longest side of such a picture, and all of its pixels: one bigger would freeze the page that has to draw it. */
+  imageSide: 16_384,
+  imagePixels: 40_000_000,
+  /** A traffic file (a HAR file, or curl commands) the connector reads for pico_import_har. */
+  trafficBytes: 25_000_000,
+  trafficEntries: 20_000,
+  /** One recorded body, in characters; a longer one is left out with a note. */
+  trafficBodyChars: 1_000_000,
 } as const
 
 export const TIMING = {
@@ -82,6 +92,8 @@ export const ERROR_CODES = [
   'disconnected',
   'timeout',
   'not-connected',
+  /** Only the connector says this: a file tool was used but the connector was not started with --root. */
+  'not-enabled',
 ] as const
 
 export type ErrorCode = (typeof ERROR_CODES)[number]

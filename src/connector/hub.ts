@@ -60,6 +60,13 @@ export interface CallOptions {
   onAwaiting?: () => void
 }
 
+/** What an agent is told when no tab is connected. */
+export const NOT_CONNECTED: ToolError = {
+  code: 'not-connected',
+  message: 'Pico is not connected.',
+  hint: 'Call pico_connect, show the user the pairing code, and ask them to paste it in Pico (Settings, Agent connection).',
+}
+
 /** What a call resolves to when the agent stopped waiting. Nobody sees it; the agent has moved on. */
 const STOPPED: HubResult = { ok: false, error: { code: 'no-answer', message: 'The agent stopped waiting for Pico.' } }
 
@@ -173,16 +180,7 @@ export class Hub {
   /** Ask the tab to run a tool. Never throws: a missing tab, a timeout or a dropped connection is an error result. */
   call(tool: string, args: unknown, timeoutMs: number = this.#options.callMs ?? TIMING.callMs, options: CallOptions = {}): Promise<HubResult> {
     const session = this.#current
-    if (!session) {
-      return Promise.resolve({
-        ok: false,
-        error: {
-          code: 'not-connected',
-          message: 'Pico is not connected.',
-          hint: 'Call pico_connect, show the user the pairing code, and ask them to paste it in Pico (Settings, Agent connection).',
-        },
-      })
-    }
+    if (!session) return Promise.resolve({ ok: false, error: NOT_CONNECTED })
     // The agent already gave up: nothing is sent.
     if (options.signal?.aborted) return Promise.resolve(STOPPED)
     const id = this.#nextId++

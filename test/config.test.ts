@@ -35,6 +35,18 @@ describe('the connector’s settings', () => {
     expect(new Set(config.origins).size).toBe(config.origins.length)
   })
 
+  it('read no files unless it is given a folder, as an absolute path, by flag or by environment', () => {
+    expect(parseConfig([], {}).root).toBeNull()
+    expect(parseConfig(['--root', '/work/project'], {}).root).toBe('/work/project')
+    expect(parseConfig(['--root=/work/other'], { PICO_MCP_ROOT: '/work/env' }).root).toBe('/work/other')
+    expect(parseConfig([], { PICO_MCP_ROOT: '/work/env' }).root).toBe('/work/env')
+    expect(parseConfig([], { PICO_MCP_ROOT: '' }).root).toBeNull()
+    expect(() => parseConfig(['--root', 'relative/folder'], {})).toThrow(ConfigError)
+    expect(() => parseConfig(['--root', 'relative/folder'], {})).toThrow('absolute')
+    expect(() => parseConfig([], { PICO_MCP_ROOT: '~/project' })).toThrow('absolute')
+    expect(() => parseConfig(['--root'], {})).toThrow('needs a value')
+  })
+
   it('allow port 0, which means any free port', () => {
     expect(parseConfig(['--port', '0'], {}).port).toBe(0)
   })

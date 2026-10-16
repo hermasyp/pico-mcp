@@ -26,6 +26,8 @@ const NAMES = [
   'pico_update_endpoint',
   'pico_delete_endpoints',
   'pico_import_document',
+  'pico_import_har',
+  'pico_attach_image',
   'pico_apply_ops',
   'pico_undo_last_edit',
   'pico_focus',
@@ -42,7 +44,7 @@ function walk(schema: Schema, visit: (node: Schema, depth: number) => void, dept
 }
 
 describe('the tool catalog', () => {
-  it('lists the sixteen tools of this release once each, in a stable order', () => {
+  it('lists the eighteen tools of this release once each, in a stable order', () => {
     expect(AGENT_TOOLS.map((tool) => tool.name)).toEqual(NAMES)
     expect(new Set(AGENT_TOOLS.map((tool) => tool.name)).size).toBe(NAMES.length)
     expect(toolByName('pico_status')?.title).toBeTruthy()
@@ -54,7 +56,9 @@ describe('the tool catalog', () => {
     expect(home('pico_connect')).toBe('connector')
     expect(home('pico_format_guide')).toBe('connector')
     expect(home('pico_undo_last_edit')).toBe('bridge')
-    for (const name of NAMES.filter((item) => !['pico_connect', 'pico_format_guide', 'pico_undo_last_edit'].includes(item))) {
+    // Recorded traffic is turned into endpoints here, and the tab is only asked for tools it already has.
+    expect(home('pico_import_har')).toBe('connector')
+    for (const name of NAMES.filter((item) => !['pico_connect', 'pico_format_guide', 'pico_import_har', 'pico_undo_last_edit'].includes(item))) {
       expect(home(name), name).toBe('executor')
     }
   })
@@ -65,7 +69,7 @@ describe('the tool catalog', () => {
       expect(access(name), name).toBe('read')
     }
     expect(access('pico_focus')).toBe('navigate')
-    for (const name of ['pico_create_project', 'pico_add_endpoints', 'pico_update_endpoint', 'pico_import_document', 'pico_undo_last_edit']) {
+    for (const name of ['pico_create_project', 'pico_add_endpoints', 'pico_update_endpoint', 'pico_import_document', 'pico_import_har', 'pico_attach_image', 'pico_undo_last_edit']) {
       expect(access(name), name).toBe('write')
     }
     for (const name of ['pico_delete_endpoints', 'pico_apply_ops']) expect(access(name), name).toBe('destructive')
@@ -142,6 +146,29 @@ describe('the tool catalog', () => {
     // The same response shape as pico_add_endpoints takes, so an agent does not learn two.
     const added = ((item.patch.properties as Record<string, Schema>).addResponses.items as Schema).properties as Record<string, Schema>
     expect(Object.keys(added)).toEqual(['status', 'description', 'fields', 'example'])
+  })
+
+  it('marks the tools that read a file, and only those, and says in their text what they need', () => {
+    expect(AGENT_TOOLS.filter((tool) => tool.reads === 'file').map((tool) => tool.name)).toEqual(['pico_import_har', 'pico_attach_image'])
+    for (const name of ['pico_import_har', 'pico_attach_image']) {
+      const tool = toolByName(name) as AgentToolDef
+      expect(tool.description, name).toContain('--root')
+      const properties = tool.inputSchema.properties as Record<string, Schema>
+      expect(properties.path, name).toBeDefined()
+      expect(properties.path.description, name).toContain('--root')
+    }
+    const har = toolByName('pico_import_har') as AgentToolDef
+    const harProperties = har.inputSchema.properties as Record<string, Schema>
+    expect(Object.keys(harProperties)).toEqual(['format', 'path', 'content', 'hosts', 'redact', 'projectId', 'newProject', 'onDuplicate'])
+    expect(har.inputSchema.required).toEqual(['format'])
+    expect(harProperties.format.enum).toEqual(['har', 'curl'])
+    expect(harProperties.redact.enum).toEqual(['secrets', 'all-examples', 'none'])
+    expect(harProperties.content.maxLength).toBe(LIMITS.textChars)
+    expect(harProperties.onDuplicate.enum).toEqual(['skip', 'replace', 'add'])
+    const image = toolByName('pico_attach_image') as AgentToolDef
+    expect(Object.keys(image.inputSchema.properties as object)).toEqual(['projectId', 'endpointId', 'path', 'alt'])
+    expect(image.inputSchema.required).toEqual(['endpointId', 'path'])
+    expect(image.description).toContain(`${LIMITS.imageBytes / 1_000_000} MB`)
   })
 
   it('keeps the whole tool list small enough to sit in an agent’s context', () => {
