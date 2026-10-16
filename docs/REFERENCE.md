@@ -107,10 +107,15 @@ What *tried* covers, and what it does not, is under [Verification](#verification
   as connected.
 - **Tool names carry the name of the server.** With the server called `pico`, the tools are `pico_pico_connect`,
   `pico_pico_status` and so on; call the server something else and the front changes with it.
-- **`timeout` is not a limit on a call.** The entry's `timeout` is the time OpenCode gives a server to list its
-  tools (5 seconds unless set). A change that waited 45 seconds for the person went through with it set to 30
-  seconds, and one that nobody answered was not cut short by OpenCode: it ended after the connector's own 5 minutes
-  and 15 seconds, with the connector's `timeout` message.
+- **`timeout` is how long OpenCode waits without hearing anything.** The entry's `timeout` (in milliseconds; the
+  OpenCode documentation describes it as the time to list the tools, 5 seconds unless set) also limits a call, and it
+  behaves as if every progress notice started the count again. The connector sends a notice every 10 seconds while a
+  change waits for you, so 15 seconds or more is no problem: a wait of 25 seconds went through with 15, one of 45 with
+  30, and with nothing set waits of 75 seconds and of the connector's whole 5 minutes and 15 seconds went through
+  (the last one ended with the connector's own `timeout` message). A shorter `timeout` cuts the wait: 5 seconds ended
+  it after 5 and 10 seconds after 20. OpenCode then tells the connector (it sent `notifications/cancelled` before any
+  answer), so Pico drops the question, and the agent is given `MCP error -32001: Request timed out`. Leave `timeout`
+  out, or keep it at 15000 or more.
 - **Environment.** OpenCode starts the connector with its own environment, so `PICO_MCP_PORT` and the other
   variables reach it; the entry's `environment` table adds more.
 - **What it showed.** OpenCode listed the 16 tools and asked for progress notices on every call. It did not ask
@@ -419,6 +424,19 @@ npm run build          # dist/pico-mcp.mjs, dist/lib/ and dist/THIRD_PARTY_LICEN
 nothing but its own files and uses neither Node nor the browser; the connector may use the library and its own
 files. Tests read the sources to make sure.
 
+**Trying a real agent.** `npm run host-check -- codex` (or `opencode`) builds the connector and starts it from the real
+agent program: the one on your PATH, or `--bin <path>`, in an empty temporary directory with settings of its own,
+so yours are not read. The model behind the agent is a script that asks for `pico_connect`, `pico_status` and
+`pico_add_endpoints`, and the Pico tab is a stand-in, so no account, model or browser is needed. It reports what the
+agent did: which tools it was offered, whether the three calls came back, whether it asked for progress notices,
+whether it cancelled a call, which environment reached the connector and how the connector ended. Options make the
+third call wait for "the person" (`--ask-wait-s 75`), give the agent a lower limit for a call (`--tool-timeout-sec 20`)
+or interrupt it (`--sigint-after-s 5`); `--help` lists them all. It is not part of `npm test` or of CI: it needs
+the agent installed (`npm install --prefix ~/.cache/pico-mcp-host-check @openai/codex opencode-ai` is enough, about
+700 MB), and what it shows holds for the version that was run. The script is in `scripts/host-check/`, and
+`test/host-check.test.ts` tests the parts of it that need no agent. What the runs found is under
+[Using it with each agent](#using-it-with-each-agent).
+
 **Adding a tool.** A tool has two halves: its description here (name, access, JSON Schema with
 `additionalProperties: false`, in `src/catalog.ts`) and its implementation in Pico, which owns the workspace.
 Describe it, list it in the table above (a test fails until this file names every tool, prompt, option, error
@@ -450,8 +468,10 @@ like the one the connector's own tests use, not the page. Both programs started 
 every answer. Both asked for progress notices on every call, and a change that waited for the person went through
 after 75 seconds in both and after 150 seconds in Codex. Further runs measured what is written under
 [Using it with each agent](#using-it-with-each-agent): the environment each one passes on, Codex's time limit
-and what it does when the limit passes, OpenCode's lack of one, and what quitting each does. These runs are not
-part of `npm test`: they need both programs (about 700 MB) and say something about one version of each.
+and what it does when the limit passes, OpenCode's `timeout` and what it does when that passes, and what quitting
+each does. These runs are not
+part of `npm test`; `npm run host-check` repeats them (see [Developing](#developing)), and they say something about one version
+of each program.
 
 Not covered: Claude Code, Claude Desktop and Cursor themselves (only the SDK client was available, so the
 configuration snippets follow each product's documentation), a real model behind Codex or OpenCode, the real

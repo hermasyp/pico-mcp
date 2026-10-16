@@ -95,6 +95,8 @@ describe('README.md, the settings for each agent', () => {
     expect(config.mcp.pico.type).toBe('local')
     expect(config.mcp.pico.command).toEqual(['node', '/absolute/path/to/pico-mcp.mjs'])
     expect(config.mcp.pico.enabled).toBe(true)
+    // OpenCode gives up on a call that is silent for `timeout` milliseconds, and Ask me first is silent for up to 10 seconds.
+    expect((config.mcp.pico as { timeout?: number }).timeout ?? 15_000).toBeGreaterThanOrEqual(15_000)
   })
 
   it('gives Claude Desktop and Cursor the file they read', () => {

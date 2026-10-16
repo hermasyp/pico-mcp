@@ -101,7 +101,9 @@ away, rather than Codex's time-out (an older Codex may give a call less, and the
 }
 ```
 
-`opencode mcp list` starts the connector and should show `pico` as connected.
+`opencode mcp list` starts the connector and should show `pico` as connected. Leave `timeout` out of the entry, or
+keep it at `15000` or more: OpenCode gives up on a tool that has been silent for that many milliseconds, and *Ask me first*
+is silent for up to 10 seconds between its progress notices.
 
 Restart the agent so that it starts the connector. The Claude Desktop and Cursor snippets follow each
 product's documentation. The connector itself is tested with the official MCP SDK client over stdio, and it was
@@ -163,6 +165,7 @@ prompts) and `pico-mcp/vocabulary`.
 ```bash
 npm ci
 npm run verify         # type-check, tests, build
+npm run host-check -- codex   # optional: start the built connector from a real Codex or OpenCode
 ```
 
 ## License

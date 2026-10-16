@@ -16,6 +16,10 @@ Documentation only; the connector is the one released as 1.2.0.
   Codex does not tell the connector when its time limit (`tool_timeout_sec`, 300 seconds unless set) cuts a call
   short, so a question can stay open in Pico after the agent has given up; the README asks for 330 seconds when
   *Ask me first* is used.
+- **`npm run host-check`** starts the built connector from a real Codex or OpenCode, with a scripted model and a stand-in for
+  the Pico tab, and reports what the agent did with it (the tools it was offered, the calls, progress notices, cancellations, the
+  environment it passed on). It is for contributors, is not part of `npm test` or of the package, and has tests for its parts that
+  need no agent.
 
 ## [1.2.0] - 2026-10-15
 

@@ -58,6 +58,7 @@
     "build": "node scripts/build.mjs",
     "test": "vitest run",
     "verify": "npm run check && npm test && npm run build",
+    "host-check": "npm run build && node scripts/host-check/run.mjs",
     "prepack": "node scripts/build.mjs"
   },
   "devDependencies": {
