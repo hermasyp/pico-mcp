@@ -5,6 +5,7 @@ connecting, start with the [README](../README.md).
 
 - [How it works](#how-it-works)
 - [Options](#options)
+- [Using it with each agent](#using-it-with-each-agent)
 - [What the agent may see and do](#what-the-agent-may-see-and-do)
 - [Tools](#tools), [Review and comparison](#review-and-comparison), [Changing many endpoints](#changing-many-endpoints),
   [Errors](#errors) and [Prompts](#prompts)
@@ -17,7 +18,7 @@ connecting, start with the [README](../README.md).
 ## How it works
 
 ```text
-Agent (Claude Code / Desktop / Cursor)
+Agent (Claude Code, Codex, OpenCode, Cursor…)
   │  MCP over stdio
   ▼
 pico-mcp   the connector: src/connector/, Node 20+, started by the agent, one process per agent session
@@ -59,6 +60,70 @@ option. Anything else, such as Pico served from another address, needs `--origin
 stdout belongs to MCP: everything meant for a person goes to stderr, except the output of `--help` and
 `--version`, which start nothing.
 
+## Using it with each agent
+
+Any program that can start an MCP server over stdio can start the connector, so this is what to set and what
+differs from agent to agent, not a list of what is allowed. The settings themselves are in the
+[README](../README.md#install).
+
+| Agent | Where it is set | Tried |
+|---|---|---|
+| Claude Code | `claude mcp add` | Not run here; the setting follows its documentation. |
+| Claude Desktop | `claude_desktop_config.json` | Not run here; the setting follows its documentation. |
+| Cursor | `.cursor/mcp.json` | Not run here; the setting follows its documentation. |
+| Codex | `~/.codex/config.toml` | Codex CLI 0.163.0 started it, listed the tools and called them. |
+| OpenCode | `opencode.json` | OpenCode 1.19.2 started it, listed the tools and called them. |
+
+What *tried* covers, and what it does not, is under [Verification](#verification).
+
+### Codex
+
+- **The setting.** `codex mcp add pico -- node /absolute/path/to/pico-mcp.mjs` writes a `[mcp_servers.pico]` table
+  with `command` and `args` to `~/.codex/config.toml`, which every project uses. `codex mcp list` shows it.
+- **Options go in `args`.** Codex starts the connector with a small environment of its own: a variable set in your
+  shell, such as `PICO_MCP_PORT`, did not reach it. Give the options as arguments, for example
+  `args = ["/absolute/path/to/pico-mcp.mjs", "--port", "47700"]`, or list the variable in the entry's `env` table.
+- **How long it waits for a tool.** Every call has a limit, `tool_timeout_sec` in the entry, and progress notices do
+  not move it: with it set to 20 seconds, a change that waited for the person was cut after 20 seconds although the
+  connector had sent notices. Codex 0.163.0 gives a call 300 seconds when the entry says nothing, which is the 5
+  minutes that Pico waits for you, so the default is nearly right: if you do not answer, the agent is given Codex's
+  time-out at about the moment Pico would have given it `no-answer`. Set `tool_timeout_sec = 330` and Pico's own
+  answer, which tells the agent not to retry in a loop, arrives first. An older Codex, or a lower setting, cuts the
+  wait short, and then the next point applies.
+- **It does not say when it gives up.** When its limit passed, Codex did not tell the connector (MCP has a
+  `notifications/cancelled` message for this) and went on, so the connector kept the call, and Pico kept the
+  question, until you answered it or the 5 minutes ended. If you apply it then, the change is made, although the
+  agent was told that the call failed: after a time-out, look in Pico before asking the agent to try again.
+  If Codex itself ends while a change waits (we sent it an interrupt), the connector ends with it, and Pico
+  drops the question.
+- **What it showed.** Codex listed the 16 tools as one group under the name you gave the server (`pico`), with the
+  connector's instructions as the group's description, and asked for progress notices on every call. It did not
+  ask for the prompts (see below).
+
+### OpenCode
+
+- **The setting.** The `mcp` table of `opencode.json`, in your project or in `~/.config/opencode/opencode.json`.
+  `command` is one list: the program, then its arguments. `opencode mcp list` starts the connector and shows `pico`
+  as connected.
+- **Tool names carry the name of the server.** With the server called `pico`, the tools are `pico_pico_connect`,
+  `pico_pico_status` and so on; call the server something else and the front changes with it.
+- **`timeout` is not a limit on a call.** The entry's `timeout` is the time OpenCode gives a server to list its
+  tools (5 seconds unless set). A change that waited 45 seconds for the person went through with it set to 30
+  seconds, and one that nobody answered was not cut short by OpenCode: it ended after the connector's own 5 minutes
+  and 15 seconds, with the connector's `timeout` message.
+- **Environment.** OpenCode starts the connector with its own environment, so `PICO_MCP_PORT` and the other
+  variables reach it; the entry's `environment` table adds more.
+- **What it showed.** OpenCode listed the 16 tools and asked for progress notices on every call. It did not ask
+  for the prompts (see below). If OpenCode itself ends while a change waits (we sent it an interrupt), the
+  connector ends with it, and Pico drops the question.
+
+### Prompts
+
+The prompts (`contract_from_design` and the others, see [Prompts](#prompts)) are offered to agents that list MCP
+prompts, as Claude Code does as slash commands. In the runs Codex and OpenCode only asked for the tools, so with
+them say in plain words what you want: the tools, their descriptions and `pico_format_guide` carry the same
+guidance.
+
 ## What the agent may see and do
 
 This part is what the Pico tab does with the connection; it is described here because it is what you see.
@@ -79,8 +144,10 @@ This part is what the Pico tab does with the connection; it is described here be
   rather than to *Can edit*.
 - **While a change waits.** The agent's call stays open for up to 5 minutes. If the agent asked for progress
   notices, the connector sends one every 10 seconds ("Waiting for the person to approve this change in
-  Pico."); some agent hosts stop waiting after about a minute anyway, and then Pico drops the proposal and
-  tells you so. Only the Pico tab shows the question, so it also shows in the top bar and the page title.
+  Pico."). An agent that stops waiting sooner has to say so (MCP's `notifications/cancelled`), and then Pico drops
+  the proposal and tells you; one that stops without saying so leaves the question in Pico until you answer it
+  or the 5 minutes end (see [Codex](#codex)), and applying it then still makes the change. Only the Pico tab
+  shows the question, so it also shows in the top bar and the page title.
 - **Restore point.** The first change of a burst of edits (edits less than two minutes apart, at most 25
   changes) keeps a restore point first; Pico lists it in Settings → Storage and backup as *Before agent edits ·
   <agent>* (Pico 2.1.1 and later keeps the newest 10 of these in a place of their own).
@@ -376,9 +443,20 @@ on loopback and hangs up) and a real WebSocket against the hub (the handshake, a
 away or does not answer). Pico's own tests run its tab against the same protocol and catalog, and its browser
 tests drive the built connector with the SDK client and Pico in a real browser.
 
+**Codex and OpenCode.** In October 2026 the built connector was started by the real Codex CLI (0.163.0) and
+OpenCode (1.19.2), each in an empty directory with settings of its own. The model was a script that asks for
+three fixed calls (`pico_connect`, `pico_status`, `pico_add_endpoints`), and the Pico tab was a stand-in, written
+like the one the connector's own tests use, not the page. Both programs started the connector, listed its 16 tools and got
+every answer. Both asked for progress notices on every call, and a change that waited for the person went through
+after 75 seconds in both and after 150 seconds in Codex. Further runs measured what is written under
+[Using it with each agent](#using-it-with-each-agent): the environment each one passes on, Codex's time limit
+and what it does when the limit passes, OpenCode's lack of one, and what quitting each does. These runs are not
+part of `npm test`: they need both programs (about 700 MB) and say something about one version of each.
+
 Not covered: Claude Code, Claude Desktop and Cursor themselves (only the SDK client was available, so the
-configuration snippets follow each product's documentation), Firefox, and the browser's local network prompt
-for a page on the internet.
+configuration snippets follow each product's documentation), a real model behind Codex or OpenCode, the real
+Pico page with either of them, their interactive screens and their own permission questions, other versions of
+them, Windows, Firefox, and the browser's local network prompt for a page on the internet.
 
 ## Limits
 

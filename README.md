@@ -3,7 +3,7 @@
 [![CI](https://github.com/hermasyp/pico-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/hermasyp/pico-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Let an AI agent such as **Claude Code, Claude Desktop or Cursor** read and edit your API contracts in
+Let an AI agent such as **Claude Code, Codex, OpenCode, Claude Desktop or Cursor** read and edit your API contracts in
 [Pico](https://pico.hermasyp.space), the client-only API contract editor. The agent can
 
 - turn a **design** (a screenshot you give it) into endpoints, using its own eyes;
@@ -26,7 +26,7 @@ a small program that runs **on your own machine**: the agent starts it and talks
 the Pico tab connects to it over a WebSocket on `127.0.0.1`.
 
 ```text
-Agent (Claude Code / Desktop / Cursor)
+Agent (Claude Code, Codex, OpenCode, Cursor…)
   │  MCP over stdio
   ▼
 pico-mcp   this program: Node 20+, started by the agent
@@ -67,8 +67,47 @@ claude mcp add pico -- node /absolute/path/to/pico-mcp.mjs
 }
 ```
 
-Restart the agent so that it starts the connector. These snippets follow each product's documentation; the
-connector itself is tested with the official MCP SDK client over stdio (see [docs/REFERENCE.md](docs/REFERENCE.md#verification)).
+**Codex** (the Codex CLI)
+
+```bash
+codex mcp add pico -- node /absolute/path/to/pico-mcp.mjs
+```
+
+That adds the table below to `~/.codex/config.toml`, where you can also write it yourself. On Windows, put the
+path in single quotes so that its backslashes stay as they are.
+
+```toml
+[mcp_servers.pico]
+command = "node"
+args = ["/absolute/path/to/pico-mcp.mjs"]
+```
+
+Codex (0.163.0) gives a tool call 300 seconds, and *Ask me first* can keep a change waiting for you for 5 minutes.
+Add `tool_timeout_sec = 330` to the table if you use it, so that Pico's own answer reaches the agent when you are
+away, rather than Codex's time-out (an older Codex may give a call less, and then this line matters more).
+
+**OpenCode** (`opencode.json` in your project, or `~/.config/opencode/opencode.json` for every project)
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "pico": {
+      "type": "local",
+      "command": ["node", "/absolute/path/to/pico-mcp.mjs"],
+      "enabled": true
+    }
+  }
+}
+```
+
+`opencode mcp list` starts the connector and should show `pico` as connected.
+
+Restart the agent so that it starts the connector. The Claude Desktop and Cursor snippets follow each
+product's documentation. The connector itself is tested with the official MCP SDK client over stdio, and it was
+also started and used by the real Codex CLI and OpenCode (see [docs/REFERENCE.md](docs/REFERENCE.md#verification)).
+Each agent has its own habits, such as how long it waits for a tool, and they are written down in
+[Using it with each agent](docs/REFERENCE.md#using-it-with-each-agent).
 
 The package is meant to be published to npm as `pico-mcp`; until it is, use the file above. To build it from
 source instead:

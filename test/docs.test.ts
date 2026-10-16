@@ -65,3 +65,46 @@ describe('docs/REFERENCE.md', () => {
     expect(read('README.md')).toContain('Ask me first')
   })
 })
+
+/*
+ * The settings for an agent are copied out of the README into the agent's own file, so what is written there has to
+ * be a setting that agent can read: a block that does not parse is a connector that never starts.
+ */
+describe('README.md, the settings for each agent', () => {
+  const readme = read('README.md')
+  const block = (language: string, mentioning: string): string => {
+    const found = [...readme.matchAll(new RegExp('```' + language + '\\n([\\s\\S]*?)```', 'g'))].map((match) => match[1] as string).find((text) => text.includes(mentioning))
+    if (found === undefined) throw new Error(`no ${language} block that mentions ${mentioning}`)
+    return found
+  }
+
+  it('names the five agents it has settings for', () => {
+    for (const agent of ['Claude Code', 'Claude Desktop', 'Cursor', 'Codex', 'OpenCode']) expect(readme, agent).toContain(agent)
+  })
+
+  it('gives Codex the command that adds the connector, and the table that command writes', () => {
+    expect(block('bash', 'codex mcp add')).toContain('codex mcp add pico -- node /absolute/path/to/pico-mcp.mjs')
+    const table = block('toml', 'mcp_servers')
+    expect(table).toMatch(/^\[mcp_servers\.pico\]$/m)
+    expect(table).toMatch(/^command = "node"$/m)
+    expect(table).toMatch(/^args = \["\/absolute\/path\/to\/pico-mcp\.mjs"[,\]]/m)
+  })
+
+  it('gives OpenCode a file it can read: a local server whose command is one list, program first', () => {
+    const config = JSON.parse(block('json', '"mcp"')) as { mcp: { pico: { type: string; command: string[]; enabled: boolean } } }
+    expect(config.mcp.pico.type).toBe('local')
+    expect(config.mcp.pico.command).toEqual(['node', '/absolute/path/to/pico-mcp.mjs'])
+    expect(config.mcp.pico.enabled).toBe(true)
+  })
+
+  it('gives Claude Desktop and Cursor the file they read', () => {
+    const config = JSON.parse(block('json', 'mcpServers')) as { mcpServers: { pico: { command: string; args: string[] } } }
+    expect(config.mcpServers.pico).toEqual({ command: 'node', args: ['/absolute/path/to/pico-mcp.mjs'] })
+  })
+
+  it('says in the reference what each agent does differently, and the README sends people there', () => {
+    expect(reference).toContain('## Using it with each agent')
+    for (const word of ['`tool_timeout_sec`', '`opencode mcp list`', '`codex mcp list`']) expect(reference, word).toContain(word)
+    expect(readme).toContain('docs/REFERENCE.md#using-it-with-each-agent')
+  })
+})

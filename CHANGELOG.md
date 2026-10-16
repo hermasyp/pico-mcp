@@ -5,6 +5,18 @@ All notable changes to Pico MCP are recorded here, following
 The wire protocol has a version of its own (`AGENT_PROTOCOL`, now 1): a connector and a Pico tab that speak
 different versions refuse each other with a message that says so.
 
+## [Unreleased]
+
+Documentation only; the connector is the one released as 1.2.0.
+
+- **Codex and OpenCode.** The README has the settings for both, and the reference has a new part, *Using it with
+  each agent*, on what each one does differently: the names it gives the tools, the environment it starts the
+  connector with, and how long it waits for a tool. The real Codex CLI (0.163.0) and OpenCode (1.19.2) started
+  the connector, listed its tools and called them, and a change that waited for the person went through in both.
+  Codex does not tell the connector when its time limit (`tool_timeout_sec`, 300 seconds unless set) cuts a call
+  short, so a question can stay open in Pico after the agent has given up; the README asks for 330 seconds when
+  *Ask me first* is used.
+
 ## [1.2.0] - 2026-10-15
 
 A third way to work with an agent: **Ask me first**. The person sees what a change would do and applies or
