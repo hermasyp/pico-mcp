@@ -41,7 +41,8 @@ connector tells the agent to ask for a reload); `pico_import_har` works with any
   *Ask me first* is used.
 - **`npm run host-check`** starts the built connector from a real Codex or OpenCode, with a scripted model and a stand-in for
   the Pico tab, and reports what the agent did with it (the tools it was offered, the calls, progress notices, cancellations, the
-  environment it passed on). It is for contributors, is not part of `npm test` or of the package, and has tests for its parts that
+  environment it passed on, and whether a picture and a recording handed over with `--root` came through: the picture byte for
+  byte, the recording as a call of `pico_add_endpoints`). It is for contributors, is not part of `npm test` or of the package, and has tests for its parts that
   need no agent.
 
 ## [1.2.0] - 2026-10-15

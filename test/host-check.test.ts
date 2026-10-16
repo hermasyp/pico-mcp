@@ -5,13 +5,15 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AGENT_PROTOCOL, proofInput } from '../src/protocol'
 import { Hub } from '../src/connector/hub'
+import { imageInfo } from '../src/connector/files'
+import { buildEndpoints, parseHar } from '../src/connector/traffic'
 import { ORIGIN } from './helpers/fake-tab'
 // @ts-expect-error plain JavaScript: the scripts are run by Node, they are not part of the program
 import { findTool, startModel, toolsOf } from '../scripts/host-check/model.mjs'
 // @ts-expect-error plain JavaScript
 import { startTab } from '../scripts/host-check/tab.mjs'
 // @ts-expect-error plain JavaScript
-import { parseArgs, summarizeLog, whyFailed } from '../scripts/host-check/run.mjs'
+import { TINY_HAR, TINY_PNG, parseArgs, summarizeLog, whyFailed } from '../scripts/host-check/run.mjs'
 
 /*
  * scripts/host-check starts the built connector from a real agent (Codex, OpenCode) with a scripted model and a stand-in
@@ -126,6 +128,35 @@ describe('the stand-in tab', () => {
     expect(result).toMatchObject({ ok: true, data: { summary: 'Added 1 endpoint.' } })
   })
 
+  it('compares a picture that reaches it with the file, byte for byte, and says whether it was the same', async () => {
+    const hub = await startHub()
+    const tab = await startTab({ port: hub.port, token: TOKEN, protocol: { AGENT_PROTOCOL, proofInput }, expectPicture: TINY_PNG })
+    closers.push(() => tab.close())
+    const same = await hub.call('pico_attach_image', { endpointId: 'e1', image: { name: 'login.png', mime: 'image/png', data: TINY_PNG.toString('base64') } })
+    expect(same).toMatchObject({ ok: true, data: { data: { attached: true } } })
+    const other = await hub.call('pico_attach_image', { endpointId: 'e1', image: { name: 'login.png', mime: 'image/png', data: Buffer.concat([TINY_PNG, Buffer.from([0])]).toString('base64') } })
+    expect(other).toMatchObject({ ok: true, data: { data: { attached: false } } })
+    const seen = tab.events.filter((event: { picture?: unknown }) => event.picture !== undefined).map((event: { picture: unknown }) => event.picture)
+    expect(seen).toEqual([
+      { name: 'login.png', mime: 'image/png', bytes: TINY_PNG.length, same: true, keys: ['endpointId', 'image'] },
+      { name: 'login.png', mime: 'image/png', bytes: TINY_PNG.length + 1, same: false, keys: ['endpointId', 'image'] },
+    ])
+  })
+
+  it('makes only the first change wait for the person, so that the recording a run imports later does not wait again', async () => {
+    const hub = await startHub()
+    const tab = await startTab({ port: hub.port, token: TOKEN, protocol: { AGENT_PROTOCOL, proofInput }, askWaitMs: 200 })
+    closers.push(() => tab.close())
+    let awaiting = 0
+    const first = await hub.call('pico_add_endpoints', { endpoints: [] }, 5_000, { onAwaiting: () => (awaiting += 1) })
+    expect(first.ok).toBe(true)
+    const started = Date.now()
+    const second = await hub.call('pico_add_endpoints', { endpoints: [] }, 5_000, { onAwaiting: () => (awaiting += 1) })
+    expect(second.ok).toBe(true)
+    expect(awaiting).toBe(1)
+    expect(Date.now() - started).toBeLessThan(150)
+  })
+
   it('does not answer a call that was cancelled while it waited', async () => {
     const hub = await startHub()
     const tab = await startTab({ port: hub.port, token: TOKEN, protocol: { AGENT_PROTOCOL, proofInput }, askWaitMs: 300 })
@@ -136,6 +167,16 @@ describe('the stand-in tab', () => {
     await new Promise((resolve) => setTimeout(resolve, 450))
     expect(tab.events.some((event: { cancel?: number }) => event.cancel !== undefined)).toBe(true)
     expect(tab.events.some((event: { droppedReply?: string }) => event.droppedReply === 'pico_add_endpoints')).toBe(true)
+  })
+})
+
+describe('the files a run hands to the connector', () => {
+  it('are a picture and a recording that the connector accepts as such', () => {
+    expect(imageInfo(TINY_PNG)).toEqual({ mime: 'image/png', width: 1, height: 1 })
+    const parsed = parseHar(TINY_HAR)
+    if (!('entries' in parsed)) throw new Error(parsed.error)
+    const built = buildEndpoints(parsed.entries, { redact: 'secrets', shareHeaders: false })
+    expect(built.endpoints.map((endpoint: { method: string; path: string }) => `${endpoint.method} ${endpoint.path}`).sort()).toEqual(['GET /v1/users', 'GET /v1/users/{userId}', 'POST /v1/users'])
   })
 })
 

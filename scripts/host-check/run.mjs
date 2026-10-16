@@ -4,9 +4,10 @@
 //   npm run host-check -- opencode --ask-wait-s 75
 //
 // The agent is the real one (from your PATH or --bin), run in an empty temporary directory with settings of its own;
-// your own settings are not read. The model behind it is a script (model.mjs) that asks for three calls, pico_connect,
-// pico_status and pico_add_endpoints, and the Pico tab is a stand-in (tab.mjs), so no model, account or browser is
-// needed. This is not part of `npm test`: it needs the agent installed and says something about that one version.
+// your own settings are not read. The model behind it is a script (model.mjs) that asks for five calls, pico_connect,
+// pico_status, pico_add_endpoints, then pico_attach_image and pico_import_har on files in a folder the connector is
+// started with (--root), and the Pico tab is a stand-in (tab.mjs), so no model, account or browser is needed.
+// This is not part of `npm test`: it needs the agent installed and says something about that one version.
 import { spawn, execFileSync } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -112,6 +113,23 @@ export function whyFailed(output) {
   return found?.trim() ?? ''
 }
 const PAIRING = /pico:\d+:[^\s"'`\\]+/
+/** The calls of the script, in order. The last two read a file and need the connector's --root. */
+const CALLS = ['pico_connect', 'pico_status', 'pico_add_endpoints', 'pico_attach_image', 'pico_import_har']
+
+/** A picture the size of one point, as small as a PNG gets, for the run to hand to the connector. */
+export const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+
+/** A recording of three calls to one address, enough to be turned into endpoints. */
+export const TINY_HAR = JSON.stringify({
+  log: {
+    version: '1.2',
+    entries: [
+      { _resourceType: 'xhr', request: { method: 'GET', url: 'https://api.example.test/v1/users', headers: [{ name: 'Accept', value: 'application/json' }] }, response: { status: 200, content: { mimeType: 'application/json', text: '{"items":[],"total":0}' } } },
+      { _resourceType: 'xhr', request: { method: 'GET', url: 'https://api.example.test/v1/users/7', headers: [] }, response: { status: 200, content: { mimeType: 'application/json', text: '{"id":7}' } } },
+      { _resourceType: 'xhr', request: { method: 'POST', url: 'https://api.example.test/v1/users', headers: [], postData: { mimeType: 'application/json', text: '{"name":"Ann"}' } }, response: { status: 201, content: { mimeType: 'application/json', text: '{"id":8}' } } },
+    ],
+  },
+})
 const PACKAGES = { codex: '@openai/codex', opencode: 'opencode-ai' }
 
 function writeSettings({ host, dir, work, modelUrl, command, toolTimeoutSec }) {
@@ -189,9 +207,14 @@ async function main(argv) {
   const work = path.join(dir, 'work')
   mkdirSync(work, { recursive: true })
   const log = path.join(dir, 'tee.jsonl')
+  const files = path.join(dir, 'files')
+  mkdirSync(files, { recursive: true })
+  writeFileSync(path.join(files, 'login.png'), TINY_PNG)
+  writeFileSync(path.join(files, 'shop.har'), TINY_HAR)
   const started = Date.now()
   const say = (line) => console.error(`[${((Date.now() - started) / 1000).toFixed(1).padStart(6)}s] ${line}`)
 
+  const experiment = options.toolTimeoutSec !== null || options.sigintAfterS > 0
   const steps = []
   const problems = []
   let tab = null
@@ -204,7 +227,7 @@ async function main(argv) {
     async next({ tools, outputs }) {
       const index = count++
       const last = outputs.length ? text(outputs[outputs.length - 1]) : ''
-      const call = ['pico_connect', 'pico_status', 'pico_add_endpoints'][index - 1]
+      const call = CALLS[index - 1]
       if (call) steps.push({ call, ms: Date.now() - sentAt, output: last, failed: FAILED.test(last) })
       let step = { say: 'Done.' }
       if (index === 0) {
@@ -215,7 +238,7 @@ async function main(argv) {
         if (!pairing) problems.push(`pico_connect gave no pairing code: ${last.slice(0, 160)}`)
         else {
           try {
-            tab = await startTab({ ...pairing, protocol, askWaitMs: options.askWaitS * 1000, log: (line) => say(`tab ${line}`) })
+            tab = await startTab({ ...pairing, protocol, askWaitMs: options.askWaitS * 1000, expectPicture: TINY_PNG, log: (line) => say(`tab ${line}`) })
             step = { tool: 'pico_status', args: {} }
           } catch (error) {
             problems.push(`the stand-in tab could not connect: ${error.message}`)
@@ -224,6 +247,10 @@ async function main(argv) {
       } else if (index === 2) {
         step = { tool: 'pico_add_endpoints', args: { endpoints: [{ name: 'List users', method: 'GET', path: '/users' }] } }
         if (options.sigintAfterS) setTimeout(() => (say('interrupting the agent'), child.kill('SIGINT')), options.sigintAfterS * 1000)
+      } else if (index === 3 && !experiment) {
+        step = { tool: 'pico_attach_image', args: { endpointId: 'e1', path: 'login.png', alt: 'Sign in screen' } }
+      } else if (index === 4 && !experiment) {
+        step = { tool: 'pico_import_har', args: { format: 'har', path: 'shop.har', redact: 'secrets' } }
       } else if (options.lingerS) await sleep(options.lingerS * 1000)
       sentAt = Date.now()
       say(step.tool ? `the model asks for ${step.tool}` : 'the model gives its last answer')
@@ -231,7 +258,7 @@ async function main(argv) {
     },
   })
 
-  const command = ['node', path.join(here, 'tee.mjs'), log, built[0]]
+  const command = ['node', path.join(here, 'tee.mjs'), log, built[0], '--root', files]
   const settings = writeSettings({ host: options.host, dir, work, modelUrl: `http://127.0.0.1:${model.port}/v1`, command, toolTimeoutSec: options.toolTimeoutSec })
   say(`starting ${options.host} ${version}`)
   child = spawn(bin, settings.args, { cwd: work, env: { ...process.env, ...settings.env }, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -263,17 +290,25 @@ async function main(argv) {
     ['Environment', seen.environment ? `a variable set for the agent ${seen.environment.probe ? 'reached' : 'did NOT reach'} the connector (${seen.environment.variables} variables there)` : 'unknown'],
     ['Ended', `${timedOut ? 'killed after the time limit of this run; ' : ''}the agent exited with ${status}; the connector ${seen.ended ? `was ended: ${seen.ended}` : 'was still running when the agent exited'}`],
   ]
+  const picture = (tab?.events ?? []).find((event) => event.picture !== undefined)?.picture
+  if (!experiment) {
+    lines.push(['Picture', picture ? `${picture.bytes} bytes as ${picture.mime} named ${picture.name} reached the tab ${picture.same ? 'the same as the file' : 'DIFFERENT from the file'}; the call carried ${picture.keys.join(', ')}` : 'no picture reached the tab'])
+    // The third call of the script is the first pico_add_endpoints; any other is the connector adding what the recording made.
+    const imported = Math.max(0, (tab?.events ?? []).filter((event) => event.call === 'pico_add_endpoints').length - 1)
+    lines.push(['Recording', imported > 0 ? `the connector asked the tab to add its endpoints ${imported === 1 ? 'once' : `${imported} times`}` : 'the connector did not ask the tab to add any endpoint'])
+    if (imported === 0) problems.push('the recording was not turned into a call of pico_add_endpoints')
+  }
   const tabEvents = (tab?.events ?? []).filter((event) => event.cancel !== undefined || event.droppedReply !== undefined)
   if (tabEvents.length) lines.push(['Tab', tabEvents.map((event) => (event.cancel !== undefined ? `was told to cancel call ${event.cancel}` : `dropped a reply for call ${event.id}`)).join('; ')])
   if (options.verbose) for (const step of steps) lines.push([step.call, `gave back: ${step.output.replace(/\s+/g, ' ').slice(0, 400)}`])
   const width = Math.max(...lines.map(([label]) => label.length))
   console.log(lines.map(([label, value]) => `${label.padEnd(width)}  ${value}`).join('\n'))
 
-  const experiment = options.toolTimeoutSec !== null || options.sigintAfterS > 0
-  const needed = steps.slice(0, experiment ? 2 : 3)
+  const needed = steps.slice(0, experiment ? 2 : CALLS.length)
   if (!seen.client) problems.push('the agent did not start the connector')
   if (offered < catalog.AGENT_TOOLS.length) problems.push(`only ${offered} of ${catalog.AGENT_TOOLS.length} tools were offered`)
-  if (needed.length < (experiment ? 2 : 3) || needed.some((step) => step.failed)) problems.push('a call did not come back ok')
+  if (needed.length < (experiment ? 2 : CALLS.length) || needed.some((step) => step.failed)) problems.push('a call did not come back ok')
+  if (!experiment && picture && !picture.same) problems.push('the picture that reached the tab was not the file')
   if (timedOut) problems.push('the run took longer than --timeout-s')
   if (options.keep) console.log(`\nSettings and logs are in ${dir}`)
   else rmSync(dir, { recursive: true, force: true })

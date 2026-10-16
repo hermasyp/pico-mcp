@@ -99,9 +99,11 @@ What *tried* covers, and what it does not, is under [Verification](#verification
   agent was told that the call failed: after a time-out, look in Pico before asking the agent to try again.
   If Codex itself ends while a change waits (we sent it an interrupt), the connector ends with it, and Pico
   drops the question.
-- **What it showed.** Codex listed the 16 tools as one group under the name you gave the server (`pico`), with the
+- **What it showed.** Codex listed the 18 tools as one group under the name you gave the server (`pico`), with the
   connector's instructions as the group's description, and asked for progress notices on every call. It did not
-  ask for the prompts (see below).
+  ask for the prompts (see below). With the connector started with `--root`, a picture file given to
+  `pico_attach_image` reached the tab byte for byte, and a recording given to `pico_import_har` came back as a
+  call of `pico_add_endpoints`.
 
 ### OpenCode
 
@@ -121,8 +123,8 @@ What *tried* covers, and what it does not, is under [Verification](#verification
   out, or keep it at 15000 or more.
 - **Environment.** OpenCode starts the connector with its own environment, so `PICO_MCP_PORT` and the other
   variables reach it; the entry's `environment` table adds more.
-- **What it showed.** OpenCode listed the 16 tools and asked for progress notices on every call. It did not ask
-  for the prompts (see below). If OpenCode itself ends while a change waits (we sent it an interrupt), the
+- **What it showed.** OpenCode listed the 18 tools and asked for progress notices on every call. It did not ask
+  for the prompts (see below). With `--root`, its picture and its recording went through as Codex's did. If OpenCode itself ends while a change waits (we sent it an interrupt), the
   connector ends with it, and Pico drops the question.
 
 ### Prompts with these agents
@@ -519,9 +521,11 @@ make sure.
 **Trying a real agent.** `npm run host-check -- codex` (or `opencode`) builds the connector and starts it from the real
 agent program: the one on your PATH, or `--bin <path>`, in an empty temporary directory with settings of its own,
 so yours are not read. The model behind the agent is a script that asks for `pico_connect`, `pico_status` and
-`pico_add_endpoints`, and the Pico tab is a stand-in, so no account, model or browser is needed. It reports what the
-agent did: which tools it was offered, whether the three calls came back, whether it asked for progress notices,
-whether it cancelled a call, which environment reached the connector and how the connector ended. Options make the
+`pico_add_endpoints`, then for `pico_attach_image` and `pico_import_har` on a picture and a recording in a folder that
+the connector is started with (`--root`), and the Pico tab is a stand-in, so no account, model or browser is needed.
+It reports what the agent did: which tools it was offered, whether the five calls came back, whether the picture
+reached the tab byte for byte and the recording became a call of `pico_add_endpoints`, whether it asked for progress
+notices, whether it cancelled a call, which environment reached the connector and how the connector ended. Options make the
 third call wait for "the person" (`--ask-wait-s 75`), give the agent a lower limit for a call (`--tool-timeout-sec 20`)
 or interrupt it (`--sigint-after-s 5`); `--help` lists them all. It is not part of `npm test` or of CI: it needs
 the agent installed (`npm install --prefix ~/.cache/pico-mcp-host-check @openai/codex opencode-ai` is enough, about
@@ -557,9 +561,11 @@ tests drive the built connector with the SDK client and Pico in a real browser.
 
 **Codex and OpenCode.** In October 2026 the built connector was started by the real Codex CLI (0.163.0) and
 OpenCode (1.19.2), each in an empty directory with settings of its own. The model was a script that asks for
-three fixed calls (`pico_connect`, `pico_status`, `pico_add_endpoints`), and the Pico tab was a stand-in, written
-like the one the connector's own tests use, not the page. Both programs started the connector, listed its 16 tools and got
-every answer. Both asked for progress notices on every call, and a change that waited for the person went through
+five fixed calls (`pico_connect`, `pico_status`, `pico_add_endpoints`, then `pico_attach_image` and `pico_import_har`
+on a picture and a recording in the folder given with `--root`), and the Pico tab was a stand-in, written
+like the one the connector's own tests use, not the page. Both programs started the connector, listed its 18 tools and got
+every answer; the picture, 70 bytes, reached the stand-in the same as the file, and the recording became a call of
+`pico_add_endpoints` with three endpoints. Both asked for progress notices on every call, and a change that waited for the person went through
 after 75 seconds in both and after 150 seconds in Codex. Further runs measured what is written under
 [Using it with each agent](#using-it-with-each-agent): the environment each one passes on, Codex's time limit
 and what it does when the limit passes, OpenCode's `timeout` and what it does when that passes, and what quitting
