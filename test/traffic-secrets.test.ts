@@ -144,13 +144,17 @@ describe('secrets in a HAR file', () => {
     }
   })
 
-  it('does show them when the person asked to keep the values, so the test above is really looking', () => {
+  it('plants them where the parser can see them, so the test above is really looking', () => {
     const p = plant(random(7))
     const parsed = parseHar(harText(sampleEntries(p, 'api.example.com')))
     if (!('entries' in parsed)) throw new Error(parsed.error)
-    const text = JSON.stringify(buildEndpoints(parsed.entries, { redact: 'none', ...OPTIONS }))
-    const shown = everything(p).filter((secret) => text.includes(secret))
-    expect(shown.length).toBeGreaterThanOrEqual(5)
+    const text = JSON.stringify(parsed.entries)
+    const seen = everything(p).filter((secret) => text.includes(secret))
+    expect(seen.length).toBeGreaterThanOrEqual(5)
+    // And the contract is not empty because everything was dropped: its names and shape are there.
+    const built = buildEndpoints(parsed.entries, { redact: 'secrets', ...OPTIONS })
+    expect(built.endpoints.length).toBeGreaterThanOrEqual(5)
+    expect(JSON.stringify(built)).toContain('<redacted>')
   })
 
   it('count what they hid, and keep the names and the shape of the contract', () => {
@@ -239,7 +243,7 @@ describe('input meant to hurt', () => {
       for (const secret of [p.jwt, p.sk, p.hex, p.gh, p.opaque, p.short[0] as string, 'carol']) expect(text.includes(secret), `${mode}: ${secret}`).toBe(false)
       expect(text).toContain('<key>')
     }
-    expect(JSON.stringify(buildEndpoints(parsed.entries, { redact: 'none', ...OPTIONS }))).toContain(p.jwt)
+    expect(JSON.stringify(parsed.entries)).toContain(p.jwt)
   })
 
   it('does not fall over a sample nested a hundred thousand levels deep, nor one with ten thousand keys', () => {
@@ -295,7 +299,7 @@ describe('input meant to hurt', () => {
 // ---- each rule on its own, with a value that no other rule would catch ----
 
 /** One curl command with a JSON body, read the way a recording is, and everything that came out of it as text. */
-function readBody(body: Record<string, unknown>, redact: 'secrets' | 'all-examples' | 'none' = 'secrets', extra = ''): string {
+function readBody(body: Record<string, unknown>, redact: 'secrets' | 'all-examples' = 'secrets', extra = ''): string {
   const parsed = parseCurl(`curl -X POST 'https://api.x.test/v1/things' ${extra} -H 'Content-Type: application/json' -d '${JSON.stringify(body).replace(/'/g, `'\\''`)}'`)
   if (!('entries' in parsed)) throw new Error(parsed.error)
   return JSON.stringify(buildEndpoints(parsed.entries, { redact, shareHeaders: false }))
@@ -350,14 +354,14 @@ describe('every rule that hides a secret, on its own', () => {
     expect(out).toContain('did not match')
   })
 
-  it('keeps nothing of an example when asked for names and types only, and everything when asked for nothing to be hidden', () => {
+  it('keeps nothing of an example when asked for names and types only, and keeps what is not a secret otherwise', () => {
     const body = { note: 'plain words', token: 'abc123', count: 3 }
     const bare = readBody(body, 'all-examples')
     expect(bare).not.toContain('plain words')
     expect(bare).not.toContain('abc123')
-    const open = readBody(body, 'none')
-    expect(open).toContain('plain words')
-    expect(open).toContain('abc123')
+    const usual = readBody(body, 'secrets')
+    expect(usual).toContain('plain words')
+    expect(usual).not.toContain('abc123')
   })
 
   it('reads only the first items of a long list, so that a recording cannot make it work for ever', () => {

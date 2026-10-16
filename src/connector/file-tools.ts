@@ -57,7 +57,7 @@ export async function importTraffic(tool: AgentToolDef, input: unknown, context:
   const parsed = args.format === 'har' ? parseHar(source) : parseCurl(source)
   if ('error' in parsed) return failure({ code: 'invalid-arguments', message: parsed.error, path: args.path !== undefined ? 'path' : 'content' })
   const built = buildEndpoints(parsed.entries, { redact: args.redact ?? 'secrets', ...(args.hosts ? { hosts: args.hosts } : {}), shareHeaders: args.newProject !== undefined })
-  const redactNote = args.redact === 'none' ? ['You asked for redact: none, so the examples keep the values of the recording, secrets included.'] : args.redact === 'all-examples' ? ['No example values were kept (redact: all-examples): the fields have names and types only.'] : []
+  const redactNote = args.redact === 'all-examples' ? ['No example values were kept (redact: all-examples): the fields have names and types only.'] : []
   const notes = [...redactNote, ...parsed.notes, ...built.notes].slice(0, 20)
   const counts = { entries: built.stats.entries, used: built.stats.used, skipped: built.stats.skipped, redactions: built.stats.redactions, host: built.host, otherHosts: built.hosts.filter((host) => host !== built.host) }
   if (built.endpoints.length === 0) {

@@ -12,7 +12,7 @@ import type { BODY_TYPES, FIELD_TYPES, HTTP_METHODS } from '../vocabulary'
  * has an innocent name and an ordinary shape. `all-examples` keeps no example values at all.
  */
 
-export type RedactMode = 'secrets' | 'all-examples' | 'none'
+export type RedactMode = 'secrets' | 'all-examples'
 type Method = (typeof HTTP_METHODS)[number]
 type FieldType = (typeof FIELD_TYPES)[number]
 type BodyType = (typeof BODY_TYPES)[number]
@@ -166,7 +166,7 @@ function makeRedactor(mode: RedactMode): Redactor {
       return shown.length > EXAMPLE_CHARS ? `${shown.slice(0, EXAMPLE_CHARS - 3)}...` : shown
     },
     name(name) {
-      if (mode === 'none' || !(looksLikeSecret(name) || scrubText(name.slice(0, 300)).count > 0)) return name
+      if (!(looksLikeSecret(name) || scrubText(name.slice(0, 300)).count > 0)) return name
       redactor.count += 1
       return '<key>'
     },

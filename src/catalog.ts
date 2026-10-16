@@ -382,7 +382,7 @@ export const AGENT_TOOLS: readonly AgentToolDef[] = [
         path: text('A file inside the --root folder. Give this or content.', { maxLength: 4_096 }),
         content: text('The HAR JSON or the curl commands as text. Give this or path.', { maxLength: LIMITS.textChars }),
         hosts: { type: 'array', description: 'Hosts to use, such as api.example.com. Default: the one with most calls.', maxItems: 10, items: { type: 'string', maxLength: 255 } },
-        redact: text('secrets (default) hides tokens, keys and passwords. all-examples keeps no example values. none keeps everything.', { enum: ['secrets', 'all-examples', 'none'] }),
+        redact: text('secrets (default) hides tokens, keys and passwords. all-examples keeps no example values.', { enum: ['secrets', 'all-examples'] }),
         projectId,
         newProject: text('Make a project with this name and add the endpoints to it, with the headers every endpoint shares as its common headers.', { maxLength: 200 }),
         onDuplicate: text('As in pico_add_endpoints.', { enum: ['skip', 'replace', 'add'] }),

@@ -358,13 +358,20 @@ describe('pico_import_har', () => {
     for (const value of [SECRET.jwt, SECRET.stripe, SECRET.password]) expect(seen).not.toContain(value)
   })
 
-  it('says so when it was asked to keep the values, and keeps them only then', async () => {
-    const curl = `curl 'https://api.shop.test/v1/orders' -H 'X-Request-Note: ${SECRET.cookie}' -d '{"password":"${SECRET.password}"}'`
-    const kept = await importing({ format: 'curl', content: curl, redact: 'none' }, {}, { root: null })
-    expect(JSON.stringify(kept.calls[0].args)).toContain(SECRET.password)
-    expect(JSON.parse(textOf(kept.result as never)).warnings.join(' ')).toContain('redact: none')
+  it('does not let the agent keep the secrets of a recording: there is no way to ask for it, and nothing in the answer or the calls carries them', async () => {
+    const curl = `curl 'https://api.shop.test/v1/orders' -H 'X-Request-Note: ${SECRET.cookie}' -H 'Authorization: Bearer ${SECRET.jwt}' -d '{"password":"${SECRET.password}","note":"plain words"}'`
+    const { rig: r, tab } = await connected({ root: null })
+    for (const redact of ['none', 'off', 'false', '', 'NONE']) {
+      const refused = await run(r, 'pico_import_har', { format: 'curl', content: curl, redact })
+      expect(refused.isError, redact).toBe(true)
+    }
+    expect(tab.received).toHaveLength(0)
+    const kept = await importing({ format: 'curl', content: curl }, {}, { root: null })
+    expect(JSON.stringify(kept.calls[0].args)).not.toContain(SECRET.password)
+    expect(JSON.stringify(kept.calls[0].args)).not.toContain(SECRET.jwt)
+    expect(JSON.stringify(kept.calls[0].args)).toContain('plain words')
     const none = await importing({ format: 'curl', content: curl, redact: 'all-examples' }, {}, { root: null })
-    expect(JSON.stringify(none.calls[0].args)).not.toContain(SECRET.password)
+    expect(JSON.stringify(none.calls[0].args)).not.toContain('plain words')
     expect(JSON.parse(textOf(none.result as never)).warnings.join(' ')).toContain('all-examples')
   })
 

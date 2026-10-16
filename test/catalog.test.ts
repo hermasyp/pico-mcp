@@ -162,7 +162,8 @@ describe('the tool catalog', () => {
     expect(Object.keys(harProperties)).toEqual(['format', 'path', 'content', 'hosts', 'redact', 'projectId', 'newProject', 'onDuplicate'])
     expect(har.inputSchema.required).toEqual(['format'])
     expect(harProperties.format.enum).toEqual(['har', 'curl'])
-    expect(harProperties.redact.enum).toEqual(['secrets', 'all-examples', 'none'])
+    // The agent cannot ask for the secrets to be kept: it is the one who can read an imported contract back.
+    expect(harProperties.redact.enum).toEqual(['secrets', 'all-examples'])
     expect(harProperties.content.maxLength).toBe(LIMITS.textChars)
     expect(harProperties.onDuplicate.enum).toEqual(['skip', 'replace', 'add'])
     const image = toolByName('pico_attach_image') as AgentToolDef

@@ -23,7 +23,7 @@ connector tells the agent to ask for a reload); `pico_import_har` works with any
   them to the open project, to `projectId`, or to a new project (`newProject`, with the headers every call had as its
   common headers) and answers with counts and notes, not with the recording. Tokens, keys, passwords, cookies and
   `user:password@` in an address are shown as `<redacted>` (`redact: "secrets"`, the default; `all-examples` keeps no
-  example value, `none` keeps everything). That is a heuristic, and the reference says so. A curl command is split into words,
+  example value; no setting keeps the secrets). That is a heuristic, and the reference says so. A curl command is split into words,
   never run, and `@file` is never followed.
 - **`pico_attach_image`** puts a PNG, JPEG, GIF or WebP picture (up to 3,000,000 bytes) into an endpoint's description.
   The connector reads the picture and sends its bytes to the tab inside the call; the agent is told only the name, type,

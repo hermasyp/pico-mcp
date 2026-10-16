@@ -54,7 +54,7 @@ function entriesOf(...calls: Call[]): TrafficEntry[] {
   return parsed.entries
 }
 
-const build = (calls: Call[], options: { redact?: 'secrets' | 'all-examples' | 'none'; hosts?: string[]; shareHeaders?: boolean } = {}) => buildEndpoints(entriesOf(...calls), { redact: options.redact ?? 'secrets', ...(options.hosts ? { hosts: options.hosts } : {}), shareHeaders: options.shareHeaders ?? false })
+const build = (calls: Call[], options: { redact?: 'secrets' | 'all-examples'; hosts?: string[]; shareHeaders?: boolean } = {}) => buildEndpoints(entriesOf(...calls), { redact: options.redact ?? 'secrets', ...(options.hosts ? { hosts: options.hosts } : {}), shareHeaders: options.shareHeaders ?? false })
 
 const API = 'https://api.example.com'
 const json = (value: unknown) => JSON.stringify(value)

@@ -347,7 +347,8 @@ card number), or when it is the user and password of an address (`https://user:p
 longer text. That holds for the path, the query, the headers, the bodies and the responses, and a name that is
 itself a token becomes `<key>`. It is a rule of thumb, not a promise: a secret with an innocent name and an
 ordinary shape is not found. `all-examples` keeps no example value at all, only names and types, and is the choice for
-a recording of real data; `none` keeps everything, and the answer says so. A curl command's `@file` is never followed
+a recording of real data. There is no setting that keeps the secrets of a recording: the agent that asks for an
+import is also the one that can read the endpoints back. A curl command's `@file` is never followed
 (a note says the body is missing) and `-u` becomes `Authorization: Basic <redacted>`. Nothing in a recording is run,
 fetched or opened. What is left of it reaches the agent, which can read the endpoints back, and Pico, so look at them
 in Pico before you share the contract.
