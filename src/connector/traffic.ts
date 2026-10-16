@@ -87,7 +87,7 @@ export function secretName(name: string): boolean {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
-  return words.some((word, index) => SECRET_WORDS.has(word) || SECRET_WORDS.has(word + (words[index + 1] ?? '')) || (word === 'key' && index > 0 && KEY_PREFIX.has(words[index - 1] as string)))
+  return words.some((word, index) => SECRET_WORDS.has(word) || (word === 'key' && index > 0 && KEY_PREFIX.has(words[index - 1] as string)))
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

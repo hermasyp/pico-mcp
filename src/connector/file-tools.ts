@@ -50,7 +50,8 @@ export async function importTraffic(tool: AgentToolDef, input: unknown, context:
   if (args.path !== undefined) {
     const read = await readUnderRoot(deps.root, args.path, { kind: 'traffic', maxBytes: LIMITS.trafficBytes })
     if (!read.ok) return failure(read.error)
-    source = new TextDecoder('utf-8').decode(read.bytes).replace(/^\uFEFF/, '')
+    // A byte order mark at the start is dropped by the decoder itself.
+    source = new TextDecoder('utf-8').decode(read.bytes)
   } else source = args.content as string
 
   const parsed = args.format === 'har' ? parseHar(source) : parseCurl(source)

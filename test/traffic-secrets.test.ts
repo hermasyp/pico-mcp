@@ -291,3 +291,81 @@ describe('input meant to hurt', () => {
     expect(LIMITS.trafficEntries).toBeGreaterThanOrEqual(5_000)
   })
 })
+
+// ---- each rule on its own, with a value that no other rule would catch ----
+
+/** One curl command with a JSON body, read the way a recording is, and everything that came out of it as text. */
+function readBody(body: Record<string, unknown>, redact: 'secrets' | 'all-examples' | 'none' = 'secrets', extra = ''): string {
+  const parsed = parseCurl(`curl -X POST 'https://api.x.test/v1/things' ${extra} -H 'Content-Type: application/json' -d '${JSON.stringify(body).replace(/'/g, `'\\''`)}'`)
+  if (!('entries' in parsed)) throw new Error(parsed.error)
+  return JSON.stringify(buildEndpoints(parsed.entries, { redact, shareHeaders: false }))
+}
+
+describe('every rule that hides a secret, on its own', () => {
+  it('knows a secret by its name in each of the ways a name is written', () => {
+    for (const name of ['signature', 'X-Signature', 'sig', 'apikey', 'X-APIKEY', 'api_key', 'api-key', 'apiKey', 'privatekey', 'private_key', 'accessKey', 'secretKey', 'signing_key', 'encryption-key', 'license_key', 'master_key', 'client_key', 'AccessToken', 'access_token', 'x-csrf-token', 'sessionId', 'password', 'passwd', 'user_pwd', 'otp', 'cvv', 'jwt', 'clientSecret']) {
+      expect(secretName(name), name).toBe(true)
+    }
+    for (const name of ['name', 'id', 'email', 'monkey', 'keyboard', 'turkey', 'keys', 'status', 'description', 'author', 'design', 'signal', 'assign', 'resign', 'pinned', 'spinner']) {
+      expect(secretName(name), name).toBe(false)
+    }
+  })
+
+  it('hides a value that is under a name that says it is secret, whatever the value looks like', () => {
+    const out = readBody({ signature: 'plain', apikey: 'abc', signing_key: 'x1', encryption_key: 'y2', client_key: 'z3', otp: '123456', pin: '4821' })
+    for (const value of ['plain', '"abc"', 'x1', 'y2', 'z3', '123456', '4821']) expect(out, value).not.toContain(`"example":"${value.replace(/"/g, '')}"`)
+    expect(out.match(/<redacted>/g)?.length).toBeGreaterThanOrEqual(7)
+  })
+
+  it('hides a token by its shape under an innocent name, short or long', () => {
+    const cases: Record<string, string> = {
+      shortSk: 'sk-abc123def456',
+      allLetterHex: 'deadbeefdeadbeefdeadbeefdeadbeef',
+      allDigitHex: '12345678901234567890123456789012',
+      bearer: 'Bearer abcdef123456',
+      basic: 'Basic dXNlcjpwYXNz',
+      aws: 'AKIAIOSFODNN7EXAMPLE',
+      github: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl',
+      slack: 'xoxb-1234567890-abcdefghij',
+    }
+    const out = readBody(Object.fromEntries(Object.entries(cases).map(([name, value]) => [`n${name}`, value])))
+    for (const [name, value] of Object.entries(cases)) expect(out, name).not.toContain(value)
+  })
+
+  it('finds a token inside a longer text under an innocent name, by its own shape', () => {
+    const texts = [
+      'The call failed for eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl and was retried.',
+      'Use the key sk_live_abcdef123456ghijkl to call it.',
+      'The header was Bearer abcdef0123456789 when it expired.',
+      'The digest 0123456789abcdef0123456789abcdef0123 did not match.',
+      'Sent to https://user:hunter2pw@example.test/path by mistake.',
+      'It said token=abc123def456 in the log.',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123456789 was committed.',
+    ]
+    const out = readBody(Object.fromEntries(texts.map((text, index) => [`note${index}`, text])))
+    for (const secret of ['eyJhbGciOiJIUzI1NiJ9', 'sk_live_abcdef123456ghijkl', 'abcdef0123456789', '0123456789abcdef0123456789abcdef0123', 'hunter2pw', 'abc123def456', 'ghp_abcdefghijklmnopqrstuvwxyz0123456789']) expect(out, secret).not.toContain(secret)
+    // What is around it stays, so that the text still says what it said.
+    expect(out).toContain('was retried')
+    expect(out).toContain('did not match')
+  })
+
+  it('keeps nothing of an example when asked for names and types only, and everything when asked for nothing to be hidden', () => {
+    const body = { note: 'plain words', token: 'abc123', count: 3 }
+    const bare = readBody(body, 'all-examples')
+    expect(bare).not.toContain('plain words')
+    expect(bare).not.toContain('abc123')
+    const open = readBody(body, 'none')
+    expect(open).toContain('plain words')
+    expect(open).toContain('abc123')
+  })
+
+  it('reads only the first items of a long list, so that a recording cannot make it work for ever', () => {
+    const items = Array.from({ length: 2_000 }, (_, index) => (index === 60 ? { id: index, late: 'x' } : { id: index }))
+    const start = performance.now()
+    const out = readBody({ items })
+    expect(performance.now() - start).toBeLessThan(2_000)
+    expect(out).toContain('"id"')
+    expect(out).not.toContain('"late"')
+  })
+})

@@ -130,6 +130,37 @@ describe('pico_attach_image', () => {
     expect((await pending).isError).toBeFalsy()
   })
 
+  it('cuts a very long file name where the tab will not mind', async () => {
+    const long = `${'a'.repeat(240)}.png`
+    put(long, png(10, 10))
+    const { rig: r, tab } = await connected()
+    const pending = run(r, 'pico_attach_image', { endpointId: 'e1', path: long })
+    const call = await tab.nextCall()
+    expect((call.args as { image: { name: string } }).image.name).toHaveLength(200)
+    tab.reply(call.id, { data: {}, warnings: [] })
+    expect((await pending).isError).toBeFalsy()
+  })
+
+  it('stops telling the agent that Pico waits once the answer has come', async () => {
+    put('shot.png', png(10, 10))
+    const { rig: r, tab } = await connected({ root, progressMs: 30 })
+    const notices: unknown[] = []
+    const stray: unknown[] = []
+    // A notice for a call that is over is one for a token the client no longer knows: it reports it.
+    r.client.onerror = (error) => void stray.push(error)
+    const pending = run(r, 'pico_attach_image', asked, { onprogress: (progress) => void notices.push(progress) })
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    tab.reply(call.id, { data: {}, warnings: [] })
+    await pending
+    const seen = notices.length
+    expect(seen).toBeGreaterThanOrEqual(1)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(notices.length).toBe(seen)
+    expect(stray, 'no notice is sent after the call is over').toEqual([])
+  })
+
   it('answers not-enabled, without asking the tab, when the connector was started without --root', async () => {
     put('shot.png', png(10, 10))
     const { rig: r, tab } = await connected({ root: null })
@@ -345,6 +376,42 @@ describe('pico_import_har', () => {
     expect(JSON.parse(textOf(first.result as never)).result.otherHosts).toEqual(['a.test'])
     const second = await importing({ format: 'har', path: 'mixed.har', hosts: ['a.test'] })
     expect((second.calls[0].args as { endpoints: Array<{ path: string }> }).endpoints.map((endpoint) => endpoint.path)).toEqual(['/x'])
+  })
+
+  it('reads a file that begins with a byte order mark, as some tools write them', async () => {
+    writeFileSync(path.join(root, 'bom.har'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(recording())]))
+    const { result } = await importing({ format: 'har', path: 'bom.har' })
+    expect(result.isError).toBeFalsy()
+    expect(JSON.parse(textOf(result as never)).result.imported).toBeGreaterThan(0)
+  })
+
+  it('lists the first sixty routes and counts the rest, so that a long recording does not make a long answer', async () => {
+    const many = JSON.stringify({ log: { entries: Array.from({ length: 70 }, (_, index) => entry('GET', `https://api.shop.test/v1/thing${index}`, 200, { resBody: '{"ok":true}' })) } })
+    put('many.har', many)
+    const { result } = await importing({ format: 'har', path: 'many.har' })
+    const answer = JSON.parse(textOf(result as never))
+    expect(answer.result.imported).toBe(70)
+    expect(answer.result.endpoints).toHaveLength(60)
+    expect(answer.result.moreEndpoints).toBe(10)
+  })
+
+  it('stops telling the agent that Pico waits once the answers have come', async () => {
+    put('shop.har', recording())
+    const { rig: r, tab } = await connected({ root, progressMs: 30 })
+    const notices: unknown[] = []
+    const stray: unknown[] = []
+    r.client.onerror = (error) => void stray.push(error)
+    const pending = run(r, 'pico_import_har', { format: 'har', path: 'shop.har', projectId: 'p1' }, { onprogress: (progress) => void notices.push(progress) })
+    const call = await tab.nextCall()
+    tab.awaiting(call.id)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    tab.reply(call.id, { data: { added: 3 }, warnings: [] })
+    await pending
+    const seen = notices.length
+    expect(seen).toBeGreaterThanOrEqual(1)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(notices.length).toBe(seen)
+    expect(stray, 'no notice is sent after the call is over').toEqual([])
   })
 
   it('answers with counts and notes, never with a body or a value from the recording', async () => {

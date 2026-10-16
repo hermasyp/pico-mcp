@@ -126,6 +126,14 @@ describe('readUnderRoot', () => {
     }
   })
 
+  it('does not even say that the folder above the root, or the root itself, is there to read', async () => {
+    const box = sandbox()
+    const parent = path.dirname(box.root)
+    for (const asked of ['..', '../', '../.', parent, `${parent}/`, path.join(box.root, '..'), '/', '.']) {
+      expect(await readUnderRoot(box.root, asked, IMAGE), asked).toMatchObject({ ok: false, error: { code: asked === '.' ? 'invalid-arguments' : 'not-found' } })
+    }
+  })
+
   it('refuses a link that leads out of the root, and follows one that stays inside', async () => {
     const box = sandbox()
     const secret = box.write(path.join(box.outside, 'secret.png'), png(10, 10))
@@ -181,6 +189,9 @@ describe('readUnderRoot', () => {
     const ok = await readUnderRoot(box.root, 'traffic.har', TRAFFIC)
     expect(ok.ok && ok.bytes.toString()).toBe('{"log":{"entries":[]}}')
     expect(await readUnderRoot(box.root, 'binary.har', TRAFFIC)).toMatchObject({ ok: false, error: { code: 'invalid-arguments', message: expect.stringContaining('text') } })
+    // A zero byte anywhere in the first 8 KB makes it binary, not only at the very start.
+    box.write('late.har', Buffer.concat([Buffer.from('{"log":{"entries":[]}}'), Buffer.alloc(1_000, 32), Buffer.from([0]), Buffer.from('}')]))
+    expect(await readUnderRoot(box.root, 'late.har', TRAFFIC)).toMatchObject({ ok: false, error: { code: 'invalid-arguments' } })
   })
 
   it('refuses a path that is not a usable string', async () => {
