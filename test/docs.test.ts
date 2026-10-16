@@ -108,3 +108,36 @@ describe('README.md, the settings for each agent', () => {
     expect(readme).toContain('docs/REFERENCE.md#using-it-with-each-agent')
   })
 })
+
+/*
+ * A link to a heading goes to the first heading with those words, so a second heading with the same words moves every
+ * link to the one that came first. Each heading of a document needs words of its own, and a link has to name one.
+ */
+const headings = (file: string): string[] => {
+  const found: string[] = []
+  let fenced = false
+  for (const line of read(file).split('\n')) {
+    if (line.startsWith('```')) fenced = !fenced
+    const match = fenced ? null : /^#{1,6}\s+(.*?)\s*$/.exec(line)
+    if (match) found.push(match[1] as string)
+  }
+  return found
+}
+const anchor = (heading: string): string => heading.replace(/`/g, '').toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-')
+const anchors = (file: string): string[] => headings(file).map(anchor)
+const linksIn = (file: string, pattern: RegExp): string[] => [...read(file).matchAll(pattern)].map((match) => match[1] as string)
+
+describe('the headings of the README and the reference, and the links to them', () => {
+  for (const file of ['README.md', 'docs/REFERENCE.md']) {
+    it(`${file} has no two headings with the same anchor`, () => {
+      const all = anchors(file)
+      expect(all.filter((name, index) => all.indexOf(name) !== index)).toEqual([])
+    })
+  }
+
+  it('has every link to a heading name one that exists', () => {
+    for (const name of linksIn('docs/REFERENCE.md', /\]\(#([^)]+)\)/g)) expect(anchors('docs/REFERENCE.md'), `reference #${name}`).toContain(name)
+    for (const name of linksIn('docs/REFERENCE.md', /\]\(\.\.\/README\.md#([^)]+)\)/g)) expect(anchors('README.md'), `reference to README #${name}`).toContain(name)
+    for (const name of linksIn('README.md', /\]\(docs\/REFERENCE\.md#([^)]+)\)/g)) expect(anchors('docs/REFERENCE.md'), `README to reference #${name}`).toContain(name)
+  })
+})

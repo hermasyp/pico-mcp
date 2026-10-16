@@ -117,7 +117,7 @@ What *tried* covers, and what it does not, is under [Verification](#verification
   for the prompts (see below). If OpenCode itself ends while a change waits (we sent it an interrupt), the
   connector ends with it, and Pico drops the question.
 
-### Prompts
+### Prompts with these agents
 
 The prompts (`contract_from_design` and the others, see [Prompts](#prompts)) are offered to agents that list MCP
 prompts, as Claude Code does as slash commands. In the runs Codex and OpenCode only asked for the tools, so with
