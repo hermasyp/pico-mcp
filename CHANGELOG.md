@@ -5,7 +5,7 @@ All notable changes to Pico MCP are recorded here, following
 The wire protocol has a version of its own (`AGENT_PROTOCOL`, now 1): a connector and a Pico tab that speak
 different versions refuse each other with a message that says so.
 
-## [Unreleased]
+## [1.3.0] - 2026-10-17
 
 Pictures and recorded traffic. Both new tools start from a file, which the connector reads only if the person started
 it with `--root <folder>`. `pico_attach_image` needs Pico 2.4.0 or later (an older Pico answers `unknown-tool`, and the
