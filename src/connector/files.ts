@@ -109,6 +109,8 @@ export async function resolveRoot(root: string): Promise<string> {
     throw new Error(`--root “${root}” does not exist.`)
   }
   if (!(await stat(real)).isDirectory()) throw new Error(`--root “${root}” is not a folder.`)
+  // The top of a disk would let an agent ask for any file the person can read, and that is not what a folder to work in is.
+  if (path.parse(real).root === real) throw new Error(`--root “${root}” is the top of a disk, which is more than the connector should read. Choose a folder inside it.`)
   return real
 }
 
@@ -131,8 +133,9 @@ export async function readUnderRoot(root: string | null, requested: unknown, opt
     return fail('invalid-arguments', 'path must be the path of a file inside the folder the connector may read.', { path: 'path' })
   }
 
+  // Not a check of the words of the path: an absolute path may go through a link to the root (on macOS /tmp is one), and it is
+  // the real path of the file that must lie inside the folder.
   const wanted = path.resolve(root, requested)
-  if (!inside(root, wanted)) return NOT_THERE
   let real: string
   try {
     real = await realpath(wanted)

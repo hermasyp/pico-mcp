@@ -5,6 +5,7 @@ import { fromJsonSchema } from '@modelcontextprotocol/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { toolByName } from '../src/catalog'
 import { resolveRoot } from '../src/connector/files'
+import { Lane, importTraffic } from '../src/connector/file-tools'
 import { LIMITS } from '../src/protocol'
 import type { FakeTab } from './helpers/fake-tab'
 import { png } from './helpers/pictures'
@@ -278,6 +279,52 @@ describe('pico_attach_image', () => {
       expect((await run(r, 'pico_attach_image', args)).isError, JSON.stringify(args).slice(0, 80)).toBe(true)
     }
     expect(tab.received).toHaveLength(0)
+  })
+
+  it('sends one picture at a time, in the order they were asked for, so that several at once do not fill the tab', async () => {
+    put('a.png', png(10, 10))
+    put('b.png', png(11, 11))
+    put('c.png', png(12, 12))
+    const { rig: r, tab } = await connected()
+    const first = run(r, 'pico_attach_image', { endpointId: 'e1', path: 'a.png' })
+    const second = run(r, 'pico_attach_image', { endpointId: 'e1', path: 'b.png' })
+    const third = run(r, 'pico_attach_image', { endpointId: 'e1', path: 'c.png' })
+    const one = await tab.nextCall()
+    expect((one.args as { image: { name: string } }).image.name).toBe('a.png')
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(tab.received, 'the others wait for the first to be answered').toHaveLength(0)
+    tab.reply(one.id, { data: {}, warnings: [] })
+    const two = await tab.nextCall()
+    expect((two.args as { image: { name: string } }).image.name).toBe('b.png')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(tab.received).toHaveLength(0)
+    tab.reply(two.id, { data: {}, warnings: [] })
+    const three = await tab.nextCall()
+    expect((three.args as { image: { name: string } }).image.name).toBe('c.png')
+    tab.reply(three.id, { data: {}, warnings: [] })
+    for (const pending of [first, second, third]) expect((await pending).isError).toBeFalsy()
+  })
+
+  it('lets a call that is withdrawn while it waits leave the line, and keeps the order of the rest', async () => {
+    put('a.png', png(10, 10))
+    put('b.png', png(11, 11))
+    put('c.png', png(12, 12))
+    const { rig: r, tab } = await connected()
+    const first = run(r, 'pico_attach_image', { endpointId: 'e1', path: 'a.png' })
+    const one = await tab.nextCall()
+    const controller = new AbortController()
+    const second = run(r, 'pico_attach_image', { endpointId: 'e1', path: 'b.png' }, { signal: controller.signal })
+    const third = run(r, 'pico_attach_image', { endpointId: 'e1', path: 'c.png' })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    controller.abort()
+    await expect(second).rejects.toBeDefined()
+    expect(tab.received, 'nothing was sent for the one that left').toHaveLength(0)
+    tab.reply(one.id, { data: {}, warnings: [] })
+    const next = await tab.nextCall()
+    expect((next.args as { image: { name: string } }).image.name).toBe('c.png')
+    tab.reply(next.id, { data: {}, warnings: [] })
+    expect((await first).isError).toBeFalsy()
+    expect((await third).isError).toBeFalsy()
   })
 })
 
@@ -557,5 +604,155 @@ describe('pico_import_har', () => {
       expect((await run(r, 'pico_import_har', args)).isError, JSON.stringify(args).slice(0, 80)).toBe(true)
     }
     expect(tab.received).toHaveLength(0)
+  })
+
+  it('tells the agent that personal details are kept, and that names and types only is the choice for real data', async () => {
+    const curl = `curl 'https://api.shop.test/v1/orders' -d '{"email":"ann@example.com"}'`
+    const kept = await importing({ format: 'curl', content: curl }, {}, { root: null })
+    const keptWarnings = JSON.parse(textOf(kept.result as never)).warnings as string[]
+    expect(keptWarnings[0]).toMatch(/only secrets are hidden/)
+    expect(keptWarnings[0]).toMatch(/all-examples/)
+    const bare = await importing({ format: 'curl', content: curl, redact: 'all-examples' }, {}, { root: null })
+    const bareWarnings = JSON.parse(textOf(bare.result as never)).warnings as string[]
+    expect(bareWarnings[0]).toMatch(/No example values were kept/)
+    expect(bareWarnings.join(' ')).not.toMatch(/only secrets are hidden/)
+  })
+
+  it('says nothing of what a recording held when the reading itself goes wrong', async () => {
+    const trap = new Proxy([], {
+      get() {
+        throw new Error(`broke on ${SECRET.password} in /etc/hidden/path`)
+      },
+    })
+    const hub = { state: 'connected', callMs: 1_000 } as never
+    const result = await importTraffic(toolByName('pico_import_har')!, { format: 'curl', content: 'curl https://api.shop.test/a', hosts: trap }, {} as never, { hub, root: null, progressMs: 0 })
+    expect(result.isError).toBe(true)
+    expect(textOf(result as never)).toMatch(/could not be read/)
+    expect(textOf(result as never)).not.toMatch(/hunter2|etc\/hidden|broke on/)
+  })
+
+  it('reads curl text up to two million bytes and a HAR file up to twenty-five million', async () => {
+    put('big.sh', `curl https://api.shop.test/v1/a # ${'x'.repeat(LIMITS.curlBytes)}`)
+    put('padded.har', `${' '.repeat(LIMITS.curlBytes + 1)}${recording()}`)
+    const { rig: r, tab } = await connected()
+    const curl = await run(r, 'pico_import_har', { format: 'curl', path: 'big.sh' })
+    expect(curl.isError).toBe(true)
+    expect(textOf(curl as never)).toMatch(/too-large/)
+    expect(textOf(curl as never)).toContain('2,000,000')
+    expect(tab.received).toHaveLength(0)
+    const pending = run(r, 'pico_import_har', { format: 'har', path: 'padded.har', projectId: 'p1' })
+    const call = await tab.nextCall()
+    tab.reply(call.id, { data: { added: 3 }, warnings: [] })
+    expect((await pending).isError).toBeFalsy()
+  })
+
+  it('shows ten of the other hosts and counts the rest, so that a recording of a thousand hosts is not a long answer', async () => {
+    const entries = [...Array.from({ length: 5 }, () => entry('GET', 'https://api.shop.test/v1/a', 200, { resBody: '{"ok":true}' })), ...Array.from({ length: 1_000 }, (_, index) => entry('GET', `https://h${index}.other.test/x`, 200, { resBody: '{"ok":true}' }))]
+    put('hosts.har', JSON.stringify({ log: { entries } }))
+    const { result } = await importing({ format: 'har', path: 'hosts.har' })
+    const answer = JSON.parse(textOf(result as never))
+    expect(answer.result.host).toBe('api.shop.test')
+    expect(answer.result.otherHosts).toHaveLength(10)
+    expect(answer.result.moreHosts).toBe(990)
+    expect(textOf(result as never).length).toBeLessThan(6_000)
+  })
+
+  it('lists routes that are short and clean, however long the paths of the recording were', async () => {
+    const long = 'seg.'.repeat(60)
+    const entries = Array.from({ length: 70 }, (_, index) => entry('GET', `https://api.shop.test/${long}${index}/%E2%80%AE`, 200, { resBody: '{"ok":true}' }))
+    put('long.har', JSON.stringify({ log: { entries } }))
+    const { result } = await importing({ format: 'har', path: 'long.har' })
+    const listed = JSON.parse(textOf(result as never)).result.endpoints as string[]
+    expect(listed).toHaveLength(60)
+    for (const route of listed) expect(route.length).toBeLessThanOrEqual(120)
+  })
+
+  it('cuts a route at a hundred and twenty characters and not before', async () => {
+    const dotted = (length: number): string => `${'a.'.repeat(Math.floor(length / 2))}${length % 2 === 1 ? 'a' : ''}`
+    // "GET " is four characters, so a path of 116 makes a route of 120 and a path of 117 one of 121.
+    put('edge.har', JSON.stringify({ log: { entries: [entry('GET', `https://api.shop.test/${dotted(115)}`, 200, { resBody: '{"ok":true}' }), entry('POST', `https://api.shop.test/${dotted(116)}`, 200, { resBody: '{"ok":true}' })] } }))
+    const { result } = await importing({ format: 'har', path: 'edge.har' })
+    const listed = JSON.parse(textOf(result as never)).result.endpoints as string[]
+    expect(listed.map((route) => route.length).sort()).toEqual([120, 120])
+    expect(listed.some((route) => route.startsWith('GET ') && route.endsWith('a'))).toBe(true)
+    expect(listed.some((route) => route.startsWith('POST '))).toBe(true)
+  })
+})
+
+describe('the line that pictures wait in', () => {
+  const never = new AbortController().signal
+  const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+  it('runs one piece of work at a time, in the order they were asked for', async () => {
+    const lane = new Lane()
+    const order: string[] = []
+    const work = (name: string, ms: number) => async () => {
+      order.push(`start ${name}`)
+      await tick(ms)
+      order.push(`end ${name}`)
+      return name
+    }
+    const results = await Promise.all([lane.run(never, work('a', 30)), lane.run(never, work('b', 5)), lane.run(never, work('c', 0))])
+    expect(order).toEqual(['start a', 'end a', 'start b', 'end b', 'start c', 'end c'])
+    expect(results).toEqual([{ value: 'a' }, { value: 'b' }, { value: 'c' }])
+  })
+
+  it('lets one that is withdrawn while it waits leave at once, and makes the next wait for the one that runs, not for the one that left', async () => {
+    const lane = new Lane()
+    const order: string[] = []
+    let finish: () => void = () => {}
+    const first = lane.run(never, () => new Promise<string>((resolve) => (finish = () => resolve('first'))).then((name) => (order.push('first ends'), name)))
+    const controller = new AbortController()
+    const second = lane.run(controller.signal, async () => (order.push('second ran'), 'second'))
+    const third = lane.run(never, async () => (order.push('third ran'), 'third'))
+    await tick(10)
+    controller.abort()
+    expect(await second, 'it leaves without waiting for the first').toBeNull()
+    await tick(20)
+    expect(order, 'the third still waits for the first').toEqual([])
+    finish()
+    expect(await first).toEqual({ value: 'first' })
+    expect(await third).toEqual({ value: 'third' })
+    expect(order).toEqual(['first ends', 'third ran'])
+  })
+
+  it('does not run work for a call that was withdrawn before it came, and does not let the next one go early', async () => {
+    const lane = new Lane()
+    const order: string[] = []
+    let finish: () => void = () => {}
+    const first = lane.run(never, () => new Promise<void>((resolve) => (finish = resolve)).then(() => void order.push('first ends')))
+    const gone = new AbortController()
+    gone.abort()
+    expect(await lane.run(gone.signal, async () => (order.push('gone ran'), 'x'))).toBeNull()
+    const next = lane.run(never, async () => void order.push('next ran'))
+    await tick(20)
+    expect(order).toEqual([])
+    finish()
+    await first
+    await next
+    expect(order).toEqual(['first ends', 'next ran'])
+  })
+
+  it('goes on to the next when the work fails', async () => {
+    const lane = new Lane()
+    await expect(lane.run(never, async () => Promise.reject(new Error('broke')))).rejects.toThrow('broke')
+    expect(await lane.run(never, async () => 'after')).toEqual({ value: 'after' })
+  })
+})
+
+describe('what the answer of an import holds at most', () => {
+  it('gives twenty notes at most, the first of them the one about personal details', async () => {
+    const { rig: r, tab } = await connected()
+    const body = (kind: string) => JSON.stringify({ value: kind === 'text' ? 'text' : 1 })
+    const entries = Array.from({ length: 40 }, (_, index) => ({ ...entry('POST', `https://api.shop.test/v1/mixed${String.fromCharCode(97 + (index % 26))}${String.fromCharCode(97 + Math.floor(index / 26))}`, 200, { reqBody: body('number'), resBody: '{}' }) }))
+    const again = entries.map((item) => ({ ...item, request: { ...item.request, postData: { mimeType: 'application/json', text: body('text') } } }))
+    put('notes.har', JSON.stringify({ log: { entries: [...entries, ...again] } }))
+    const pending = run(r, 'pico_import_har', { format: 'har', path: 'notes.har', projectId: 'p1' })
+    const call = await tab.nextCall()
+    tab.reply(call.id, { data: { added: 40 }, warnings: [] })
+    const answer = JSON.parse(textOf((await pending) as never))
+    expect(answer.warnings).toHaveLength(20)
+    expect(answer.warnings[0]).toMatch(/only secrets are hidden/)
+    expect(answer.warnings[1]).toMatch(/field value had/)
   })
 })

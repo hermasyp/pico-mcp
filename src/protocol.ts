@@ -41,6 +41,8 @@ export const LIMITS = {
   trafficEntries: 20_000,
   /** One recorded body, in characters; a longer one is left out with a note. */
   trafficBodyChars: 1_000_000,
+  /** Curl commands, in characters: text that is read a word at a time takes more time and memory than a HAR file of the same size. */
+  curlBytes: 2_000_000,
 } as const
 
 export const TIMING = {

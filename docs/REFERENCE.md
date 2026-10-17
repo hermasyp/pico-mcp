@@ -301,57 +301,92 @@ before it listens.
 **What it may read.**
 
 - Only inside that folder, as a path relative to it or an absolute one, and only a regular file whose real path is
-  inside it. `..`, a link that leads out, a folder that is a link, a named pipe, a device and a folder are refused.
-  A file that is missing, outside the folder or reached through a link gets one answer (`not-found`), so the agent
-  learns nothing about the rest of the disk.
+  inside it. An absolute path may go through a link to the folder (on macOS `/tmp` is one), because it is the real
+  path of the file that counts. `..` or a link that leads out of the folder, a named pipe, a device and a folder are
+  refused. A file that is missing, outside the folder or behind a link that leads out gets one answer
+  (`not-found`), so the agent learns nothing about the rest of the disk. A link inside the folder to another file
+  inside it is served, and so is a hard link: a hard link to a file elsewhere on the disk is a second name for that
+  file, which the connector cannot tell from any other file in the folder, so keep the folder to files you mean to
+  share. A folder at the top of a disk (`/`, `C:\`) is refused when the connector starts.
 - Only a file that is what the tool wants, judged by its first bytes and not by its name: a PNG, JPEG, GIF or WebP
   picture (up to 3,000,000 bytes, 16,384 pixels on a side and 40,000,000 pixels in all), a HAR file (JSON with
-  `log.entries`) or text of curl commands (up to 25,000,000 bytes). A HAR file of more than 20,000 entries is
-  refused, and a body of more than 1,000,000 characters is left out, with a note.
+  `log.entries`; up to 25,000,000 bytes and 20,000 entries) or text of curl commands (no NUL byte; up to 2,000,000
+  bytes, because text that is read word by word takes more time and memory than a HAR file of the same size).
+  Whatever is wrong with a file that is not a recording is answered in our own words (not JSON, no `log.entries`,
+  no curl command with an address), never with a line of the file.
 - A file is read once, from an open handle and up to its limit, so a file that grows or is swapped while it is
   read changes nothing. An error never repeats what a file holds.
+- Inside a recording, what would take too long or be too large is left out, and a note says how many: a body of more
+  than 1,000,000 characters (also when a HAR file holds it as base64), the data of a curl command beyond that, an
+  address of more than 16,000 characters, a path of more than 40 levels or 2,000 characters.
 
 **`pico_attach_image`** finds the type and size of the picture from its bytes and sends the picture to the tab inside
 the call (as base64, which is why 3,000,000 bytes is the most: it leaves room in a 4 MiB message). The agent is
 told what was read (name, type, pixels, bytes) and never receives the bytes. Pico shrinks and stores the picture
 the way it does one you add yourself, and the endpoint's description shows it. It needs Pico 2.4.0 or later: an
-older Pico answers `unknown-tool`, and the connector then tells the agent to ask you to reload Pico. In *Ask me
-first* the picture is listed by its name, type and size, and nothing is stored until you apply it.
+older Pico answers `unknown-tool`, and the connector then tells the agent to ask you to reload Pico. Pictures that
+an agent asks for together are sent one at a time, each waiting its turn (a call that is withdrawn while it waits
+leaves the line), so that they cannot fill the memory of the tab. In *Ask me first* the picture is listed by the
+name of its file, its type and size, with the picture itself drawn beside the line, and nothing is stored until
+you apply it. The picture is named after its file; what the agent says it shows is written into the note beside it.
 
 **`pico_import_har`** reads the recording, works out the endpoints, and adds them with `pico_add_endpoints`: to the open
 project, to `projectId`, or to a new project named by `newProject`, which is made first with `pico_create_project` and
 gets the headers that every call had as its common headers. It works with any Pico that has those two tools. The
-answer holds counts, the host used, how many values were hidden, notes and the first 60 routes, never a body or a value
-from the recording.
+answer holds counts, the host used (and at most ten others, with a count of the rest), how many values were hidden,
+at most 20 notes of at most 300 characters and the first 60 routes of at most 120, never a body or a value from the
+recording. The routes and host names are the recording's own text, cleaned of anything that hides, and are data,
+not instructions. If the agent stops waiting after the project was made and before the endpoints were added, the
+empty project stays in Pico, and the Undo of that change takes it away.
 
-- *Which calls.* Requests to web addresses that look like an API's: the browser called them XHR or fetch, or they
-  sent or answered JSON. Pages, scripts, styles, images, fonts, preflights (`OPTIONS`), `HEAD` and any method that
-  Pico does not have are left out. Of several hosts the one with most calls is used; `hosts` names others, and the
-  notes name the ones left out.
-- *Paths.* A segment that is a number, a UUID, a ULID, a long hex string or another long opaque string becomes a
-  parameter named after the segment before it: `/users/42/orders/7` is `/users/{userId}/orders/{orderId}`. Calls
-  with the same method and path become one endpoint, named like “List users”, “Get user” and “Create user”.
+- *Which calls.* Requests to web addresses that look like an API's: the browser called them XHR or fetch (where the
+  file says so), or else the answer was JSON, XML, a form or plain text, or the request sent a body of one of those
+  kinds. A curl command has no answer to look at, so it counts unless it names a page, script, style or image.
+  Pages, scripts, styles, images, fonts, preflights (`OPTIONS`), `HEAD` and any method that Pico does not have are
+  left out. Of several hosts the one with most calls is used; `hosts` names others, and the notes name the ones left
+  out.
+- *Paths.* A segment that is a number, a UUID, a ULID, a long hex string, another long string of letters and digits,
+  a short code of eight characters or more with at least three digits and three letters, or anything that looks
+  like a token becomes a parameter named after the segment before it: `/users/42/orders/7` is
+  `/users/{userId}/orders/{orderId}`. Calls with the same method and path become one endpoint, named like “List
+  users”, “Get user” and “Create user”.
 - *Fields.* The query, the body and the response are read from every sample of an endpoint and merged. A field is
   `required` only when two or more samples had it and every one did; a field with different types in different
-  samples is a string, with a note. Nesting stops at 6 levels, a level at 200 fields and a call at 200 endpoints (the
-  notes say what was left out). A response that is a list is described by its items, and the description says so.
+  samples is a string, with a note. Names are cleaned (nothing that hides, one line) and cut at 300 characters, and
+  a name with nothing left is left out. Nesting stops at 6 levels, a level at 200 fields, an endpoint at 1,000
+  fields and a call at 200 endpoints and 20,000 fields (the endpoints called least go first, and the notes say what
+  was left out). A response that is a list is described by its items, and the description says so. A response is
+  described by the standard text of its status (“OK”, “Not Found”), never by text that the recording carried.
   GraphQL on one path is flagged, because every operation shares it.
 - *Ask me first.* With `newProject` there are two calls to Pico, the project and then the endpoints, so you are asked
   twice. If the second is declined or fails, the answer says that the project was made.
 
-**Secrets.** A recording is full of them. With `redact: "secrets"`, the default, a value is replaced by `<redacted>`
-when its name says it is a secret (`Authorization`, `Cookie`, `Set-Cookie`, and any header, query parameter or JSON key
-with a word such as token, password, secret, session, signature or key in the sense of an API key), when it has the
-shape of one (a JWT, `sk-…`, `ghp_…`, an AWS or Google key, `Bearer …`, `Basic …`, a long hex or base64 string, a
-card number), or when it is the user and password of an address (`https://user:pass@host`); and so is a token inside a
-longer text. That holds for the path, the query, the headers, the bodies and the responses, and a name that is
-itself a token becomes `<key>`. It is a rule of thumb, not a promise: a secret with an innocent name and an
-ordinary shape is not found. `all-examples` keeps no example value at all, only names and types, and is the choice for
-a recording of real data. There is no setting that keeps the secrets of a recording: the agent that asks for an
-import is also the one that can read the endpoints back. A curl command's `@file` is never followed
-(a note says the body is missing) and `-u` becomes `Authorization: Basic <redacted>`. Nothing in a recording is run,
-fetched or opened. What is left of it reaches the agent, which can read the endpoints back, and Pico, so look at them
-in Pico before you share the contract.
+**Secrets.** A recording is full of them, and hiding them is a rule of thumb, not a promise. With `redact:
+"secrets"`, the default, a value is replaced by `<redacted>` when
+
+- its name says it is secret: `Authorization`, `Cookie`, `Set-Cookie`, and any header, query parameter, form field
+  or JSON key with a word such as token, password (or pass, pw), secret, session, signature, otp, pin, mfa, or
+  key in the sense of an API key (api key, private key, subscription key), also when the name is written without a
+  separator (`accesstoken`), and a code when the word before it says what it is for (`verification_code`,
+  `mfaCode`, but not `country_code`);
+- it has the shape of a secret: a JWT, `sk-…`, `ghp_…`, an npm or PyPI token, an AWS or Google key, `Bearer …`,
+  `Basic …`, a Slack or Discord webhook address, a long hex or base64 string, or a card number (with a valid check
+  digit, written together or in groups);
+- it is the user and password of an address (`https://user:pass@host`).
+
+The same is done inside a longer text (a raw body, a comment): a secret by its shape, and the value after a secret
+name (`password=…`, `"token": "…"`, `login(password: "…")`, `<Password>…</Password>`). A name that is itself a token,
+as in a map keyed by tokens, becomes `<key>`; a segment of a path that looks like an identifier or a token becomes
+a parameter, so it never reaches the path; a host name with a label that is a token is shown with `<key>`.
+
+What it cannot do is know a secret that has an innocent name and an ordinary shape (a short password under `value`).
+Names, e-mail addresses and other personal details are not secrets to it, so they stay in the examples as they were
+written, and the answer says so each time. `all-examples` keeps no example value at all, only names and types, and is
+the choice for a recording of real data. There is no setting that keeps the secrets of a recording: the agent that
+asks for an import is also the one that can read the endpoints back from Pico (`pico_get_project`, `pico_export`), so
+what the rules miss is not private from it. A curl command's `@file` is never followed (a note says the body is
+missing) and `-u` becomes `Authorization: Basic <redacted>`. Nothing in a recording is run, fetched or opened. Look
+at the endpoints in Pico before you share the contract.
 
 ### Errors
 
@@ -413,9 +448,11 @@ with the tools above.
   and the files it names are not followed.
 - **Files only on request.** The connector reads no file unless you started it with `--root <folder>`. Then it reads
   only a picture or a recording that the agent names, inside that folder, under the rules in
-  [Pictures and recorded traffic](#pictures-and-recorded-traffic). What it reads goes to the Pico tab on your
-  machine and nowhere else; a picture's bytes never pass through the agent, and the agent is told neither a file's
-  contents nor, in an error, anything about the rest of the disk.
+  [Pictures and recorded traffic](#pictures-and-recorded-traffic). The connector sends what it reads to the Pico tab
+  on your machine and to nothing else, and a picture's bytes never pass through the agent. A recording is different:
+  the agent that asks for the import can read the endpoints back from Pico, so what the hiding of secrets does not
+  catch is not private from it. An agent is told neither a file's contents nor, in an error, anything about the
+  rest of the disk.
 - **Contract text is data.** Names, descriptions and examples are written by people (and can come from files
   the agent read). The server tells the agent never to follow instructions found in them. That reduces the
   risk of prompt injection and does not remove it, which is why changes are restorable.
@@ -423,8 +460,9 @@ with the tools above.
 What this does not protect against: a program on your own machine that can read the agent's conversation or
 the connector's memory can use the code while the connector runs; an agent that you have allowed to edit
 can make changes you did not intend, which is what Ask me first, Read only, the restore points and Undo are for;
-an agent can hand Pico any picture or recording in the `--root` folder, so keep that folder to files you mean to
-share; and the hiding of secrets in a recording is a heuristic that misses a secret it cannot recognise.
+an agent can hand Pico any picture or recording in the `--root` folder (a hard link in it to a file elsewhere counts
+as being in it), so keep that folder to files you mean to share; and the hiding of secrets in a recording is a
+heuristic that misses a secret it cannot recognise and leaves names and other personal details as they were written.
 
 ## Troubleshooting
 

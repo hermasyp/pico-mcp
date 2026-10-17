@@ -374,7 +374,7 @@ export const AGENT_TOOLS: readonly AgentToolDef[] = [
     home: 'connector',
     access: 'write',
     reads: 'file',
-    description: `Turn recorded traffic (a HAR file from the browser's network tab, or curl commands) into endpoints and add them: the calls to one host, paths as templates like /users/{userId}, fields inferred from the samples, tokens and passwords shown as <redacted>. Give path (a file inside the --root folder) or content (curl text, up to ${LIMITS.textChars} characters). Answers with counts and notes, not the endpoints.`,
+    description: `Turn recorded traffic (a HAR file from the browser's network tab, or curl commands) into endpoints and add them: the calls to one host, paths as templates like /users/{userId}, fields inferred from the samples, tokens and passwords shown as <redacted>. Give path (a file inside the --root folder) or content (curl text, up to ${LIMITS.textChars} characters). Answers with counts, notes and the routes made (the first 60), not the recording.`,
     inputSchema: {
       type: 'object',
       properties: {

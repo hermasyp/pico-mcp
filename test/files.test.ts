@@ -84,6 +84,11 @@ describe('resolveRoot', () => {
     symlinkSync(box.root, link)
     expect(await resolveRoot(link)).toBe(box.root)
   })
+
+  it('does not take the top of a disk, which is more than a connector should be able to read', async () => {
+    if (path.sep === '/') await expect(resolveRoot('/')).rejects.toThrow(/top of a disk/)
+    else await expect(resolveRoot(path.parse(tmpdir()).root)).rejects.toThrow(/top of a disk/)
+  })
 })
 
 describe('readUnderRoot', () => {
@@ -102,6 +107,20 @@ describe('readUnderRoot', () => {
       const read = await readUnderRoot(box.root, asked, IMAGE)
       expect(read).toMatchObject({ ok: true, mime: 'image/png', width: 640, height: 480 })
       if (read.ok) expect(read.bytes.equals(png(640, 480))).toBe(true)
+    }
+  })
+
+  it('takes an absolute path that goes through a link to the root, as the system writes it (on macOS /tmp is a link)', async () => {
+    const box = sandbox()
+    box.write('a.png', png(10, 10))
+    box.write(path.join(box.outside, 'secret.png'), png(10, 10))
+    const link = path.join(box.outside, 'link')
+    symlinkSync(box.root, link)
+    const root = await resolveRoot(link)
+    expect(await readUnderRoot(root, path.join(link, 'a.png'), IMAGE)).toMatchObject({ ok: true, mime: 'image/png' })
+    // Going through the link does not make what is outside the folder part of it.
+    for (const asked of [path.join(link, '..', 'secret.png'), path.join(link, '..', '..', 'outside', 'secret.png')]) {
+      expect(await readUnderRoot(root, asked, IMAGE), asked).toMatchObject({ ok: false, error: { code: 'not-found' } })
     }
   })
 

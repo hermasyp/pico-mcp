@@ -64,7 +64,7 @@ describe('parseHar', () => {
     const parsed = parseHar(har({ method: 'POST', url: `${API}/orders?x=1`, requestHeaders: { 'X-Trace': 'a' }, requestText: json({ a: 1 }), status: 201, statusText: 'Created', responseText: json({ id: 7 }), type: 'xhr' }))
     expect('entries' in parsed && parsed.entries).toHaveLength(1)
     const [first] = 'entries' in parsed ? parsed.entries : []
-    expect(first).toMatchObject({ method: 'POST', url: `${API}/orders?x=1`, status: 201, statusText: 'Created', resourceType: 'xhr', requestBody: { mime: 'application/json', text: '{"a":1}' }, responseBody: { mime: 'application/json', text: '{"id":7}' } })
+    expect(first).toMatchObject({ method: 'POST', url: `${API}/orders?x=1`, status: 201, resourceType: 'xhr', requestBody: { mime: 'application/json', text: '{"a":1}' }, responseBody: { mime: 'application/json', text: '{"id":7}' } })
     expect(first?.requestHeaders).toEqual([['X-Trace', 'a']])
   })
 

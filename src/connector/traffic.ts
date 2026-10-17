@@ -48,7 +48,6 @@ export interface TrafficEntry {
   requestBody: { mime: string; text: string } | null
   requestForm: Array<{ name: string; value: string; file?: true }> | null
   status: number | null
-  statusText: string
   responseBody: { mime: string; text: string } | null
   resourceType: string | null
 }
@@ -63,21 +62,58 @@ export interface ParseError {
 
 const MARK = '<redacted>'
 const METHODS: readonly string[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-const MAX_ENDPOINT_FIELDS = 200
+/** The most fields at one level of a body, a query or a list of headers. */
+const LEVEL_FIELDS = 200
+/** The most fields in one endpoint, nested ones included. The tab takes 20,000 in a call, so this leaves room for many endpoints. */
+const ENDPOINT_FIELDS = 1_000
 const MAX_DEPTH = 6
 const MAX_ITEMS = 50
 const EXAMPLE_CHARS = 80
+/** A browser stops well short of this and so does a server; a longer address is not a request somebody made on purpose. */
+const MAX_URL_CHARS = 16_000
+const MAX_LEVELS = 40
+const MAX_PATH_CHARS = 2_000
+const MAX_NOTE_CHARS = 300
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const mimeOf = (type: string): string => type.split(';')[0]?.trim().toLowerCase() ?? ''
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
 
 // ---------------------------------------------------------------------------
+// Text from a recording, made safe to show
+// ---------------------------------------------------------------------------
+
+/** Zero-width, direction and other format characters: they are taken out, so that a token split by one is whole again. */
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
+/** Controls, line and paragraph separators and blank-looking characters: they become a space. */
+const BREAKS = new RegExp(`[\\p{Cc}\\p{Zl}\\p{Zp}${String.fromCodePoint(0x2800)}]`, 'gu')
+
+/** One line of text with nothing in it that hides: what a person would see, and what a reader can search. */
+export function clean(text: string): string {
+  return text.replace(INVISIBLE, '').replace(BREAKS, ' ').replace(/\s+/g, ' ').trim()
+}
+
+/** At most this many UTF-16 units (the tab counts them so), never ending in half of a pair. */
+export function cutUnits(text: string, max: number): string {
+  if (text.length <= max) return text
+  const cut = text.slice(0, max)
+  return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut
+}
+
+// ---------------------------------------------------------------------------
 // Secrets
 // ---------------------------------------------------------------------------
 
-const SECRET_WORDS = new Set(['password', 'passwd', 'pwd', 'passcode', 'passphrase', 'secret', 'secrets', 'token', 'tokens', 'apikey', 'authorization', 'auth', 'bearer', 'cookie', 'cookies', 'session', 'sessionid', 'sid', 'jwt', 'credential', 'credentials', 'signature', 'sig', 'otp', 'pin', 'cvv', 'cvc', 'ssn', 'csrf', 'xsrf', 'privatekey', 'accesskey', 'secretkey'])
-const KEY_PREFIX = new Set(['api', 'private', 'access', 'secret', 'signing', 'encryption', 'license', 'master', 'client'])
+const SECRET_WORDS = new Set(['password', 'passwd', 'pwd', 'pass', 'pw', 'passcode', 'passphrase', 'secret', 'secrets', 'token', 'tokens', 'apikey', 'authorization', 'auth', 'bearer', 'cookie', 'cookies', 'session', 'sessionid', 'sid', 'jwt', 'credential', 'credentials', 'signature', 'sig', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'pin', 'cvv', 'cvc', 'ssn', 'csrf', 'xsrf', 'privatekey', 'accesskey', 'secretkey'])
+const KEY_PREFIX = new Set(['api', 'private', 'access', 'secret', 'signing', 'encryption', 'license', 'master', 'client', 'subscription'])
+/** A code is a secret when the word before it says what it is for (a verification code), and not when it is a country code. */
+const CODE_PREFIX = new Set(['verification', 'verify', 'sms', 'security', 'confirmation', 'reset', 'recovery', 'backup', 'access', 'activation', 'invite', 'login', 'factor'])
+/**
+ * Names written without a separator (accesstoken, userpassword): a word that ends in one of these, or has one of the
+ * others anywhere in it (no ordinary word has password in it). The words themselves are in SECRET_WORDS.
+ */
+const SECRET_ENDINGS = ['password', 'passwd', 'passphrase', 'secret', 'token', 'apikey', 'credentials', 'credential', 'privatekey', 'secretkey', 'accesskey', 'sessionid']
+const SECRET_INSIDE = ['password', 'passwd', 'passphrase']
 
 /** Whether a name (a header, a query parameter, a JSON key) says that what it holds is secret. */
 export function secretName(name: string): boolean {
@@ -87,17 +123,30 @@ export function secretName(name: string): boolean {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean)
-  return words.some((word, index) => SECRET_WORDS.has(word) || (word === 'key' && index > 0 && KEY_PREFIX.has(words[index - 1] as string)))
+  return words.some((word, index) => {
+    if (SECRET_WORDS.has(word)) return true
+    const before = words[index - 1]
+    if (before !== undefined && ((word === 'key' && KEY_PREFIX.has(before)) || (word === 'code' && CODE_PREFIX.has(before)))) return true
+    return SECRET_ENDINGS.some((ending) => word.endsWith(ending)) || SECRET_INSIDE.some((inside) => word.includes(inside))
+  })
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const SLACK_HOOK = String.raw`https?://hooks\.slack\.com/services/[A-Za-z0-9/_-]{10,}`
+const DISCORD_HOOK = String.raw`https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d+/[A-Za-z0-9_-]+`
+/** A card number: 13 to 19 digits, perhaps in groups. Whether it is one is for the Luhn check to say. */
+const CARD = /^\d(?:[ -]?\d){12,18}$/
 const TOKEN_SHAPES: readonly RegExp[] = [
   /^eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*$/,
   /^(?:sk|pk|rk)[-_][A-Za-z0-9_-]{12,}$/,
-  /^(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|npm|pypi|AKIA|ASIA|AIza|ya29)[-_.A-Za-z0-9]{8,}$/,
+  /^(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|AKIA|ASIA|AIza|ya29)[-_.A-Za-z0-9]{8,}$/,
+  /^npm_[A-Za-z0-9]{30,}$/,
+  /^pypi-[A-Za-z0-9_-]{30,}$/,
   /^(?:Bearer|Basic|Token|Digest)\s+\S{6,}$/i,
   /^[A-Fa-f0-9]{32,}$/,
   /^(?=[A-Za-z0-9+/_-]*\d)(?=[A-Za-z0-9+/_-]*[A-Za-z])[A-Za-z0-9+/_-]{32,}={0,2}$/,
+  new RegExp(`^${SLACK_HOOK}$`),
+  new RegExp(`^${DISCORD_HOOK}$`),
 ]
 
 function luhn(digits: string): boolean {
@@ -116,69 +165,129 @@ function luhn(digits: string): boolean {
 export function looksLikeSecret(value: string): boolean {
   const text = value.trim().slice(0, 4_096)
   if (text.length < 8 || UUID.test(text)) return false
-  if (/^\d{13,19}$/.test(text) && luhn(text)) return true
+  if (CARD.test(text) && luhn(text.replace(/\D/g, ''))) return true
   return TOKEN_SHAPES.some((shape) => shape.test(text))
 }
 
-/** Tokens inside a longer text (a raw body), found by their shape. */
-function scrubText(text: string): { text: string; count: number } {
+/** A name, then the colon or equals sign that gives it a value, in the ways text writes them: `a=b`, `"a": "b"`, `a: b`, `\"a\":\"b\"`. */
+const NAME_AND_SIGN = /([\w.-]{1,60})(?:\\?["'])?\s{0,5}[:=]\s{0,5}/g
+const XML_ELEMENT = /(<([A-Za-z_][\w.:-]{0,60})(?:\s[^<>]{0,100})?>)([^<>]{1,500})(?=<\/)/g
+const TEXT_SHAPES: readonly RegExp[] = [
+  /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g,
+  /\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{12,}/g,
+  /\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|AKIA|ASIA|AIza|ya29)[-_.A-Za-z0-9]{8,}/g,
+  /\bnpm_[A-Za-z0-9]{30,}/g,
+  /\bpypi-[A-Za-z0-9_-]{30,}/g,
+  /\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/g,
+  new RegExp(SLACK_HOOK, 'g'),
+  new RegExp(DISCORD_HOOK, 'g'),
+]
+
+/** The most characters `scrubText` looks at. Whoever calls it has cut the text to what will be shown, with room to spare. */
+const SCRUB_CHARS = 1_000
+
+/**
+ * Secrets inside a longer text (a raw body, a comment), found by their shape or by the name they are written under, and
+ * replaced. Every step is a single pass; none of them looks ahead over the rest of the text.
+ */
+export function scrubText(text: string): { text: string; count: number } {
   let count = 0
   const swap = (): string => {
     count += 1
     return MARK
   }
-  const cleaned = text
-    .replace(/\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*/g, swap)
-    .replace(/\b(?:sk|pk|rk)[-_][A-Za-z0-9_-]{12,}/g, swap)
-    .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|xox[abprs]|AKIA|ASIA|AIza|ya29)[-_.A-Za-z0-9]{8,}/g, swap)
-    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{6,}/g, swap)
-    .replace(/(\b[a-z][a-z0-9+.-]{1,20}:\/\/)[^\s/:@]{1,100}:[^\s/@]{1,200}@/gi, (_, lead: string) => `${lead}${swap()}@`)
-    .replace(/\b[A-Fa-f0-9]{32,}\b/g, swap)
-    .replace(/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}\b/g, swap)
-    .replace(/((?:^|[?&\s{,"'])[\w.-]{0,60}(?:pass(?:word|wd)?|secret|token|api[-_]?key|auth|session|credential)[\w.-]{0,30}["']?\s*[:=]\s*["']?)[^&\s"',}]+/gi, (_, lead: string) => `${lead}${swap()}`)
-  return { text: cleaned, count }
+  let out = text.length > SCRUB_CHARS ? text.slice(0, SCRUB_CHARS) : text
+  for (const shape of TEXT_SHAPES) out = out.replace(shape, swap)
+  out = out.replace(/(\b[a-z][a-z0-9+.-]{1,20}:\/\/)[^\s/:@]{1,100}:[^\s/@]{1,200}@/gi, (_, lead: string) => `${lead}${swap()}@`)
+  out = out.replace(/\b[A-Fa-f0-9]{32,}\b/g, swap)
+  // A long run of letters and digits that has both is a token; one that has only one of them is a word or a number.
+  out = out.replace(/\b[A-Za-z0-9_-]{32,}\b/g, (run) => (/\d/.test(run) && /[A-Za-z]/.test(run) ? swap() : run))
+  out = out.replace(/\b\d(?:[ -]?\d){12,18}\b/g, (run) => (luhn(run.replace(/\D/g, '')) ? swap() : run))
+  out = out.replace(XML_ELEMENT, (whole, open: string, tag: string, value: string) => (secretName(tag) && value.trim() !== '' ? `${open}${swap()}` : whole))
+  return { text: maskNamedValues(out, swap), count }
+}
+
+/** Replaces the value after every secret name in the text (`password=x`, `"token": "x y"`, `login(pass:\"x\")`) and keeps the rest. */
+function maskNamedValues(text: string, swap: () => string): string {
+  const finder = new RegExp(NAME_AND_SIGN.source, 'g')
+  let out = ''
+  let last = 0
+  for (let found = finder.exec(text); found !== null; found = finder.exec(text)) {
+    if (!secretName(found[1] as string)) continue
+    const at = found.index + found[0].length
+    // A quote may come with a backslash, as in JSON that was written inside a string.
+    const quoteAt = text[at] === '\\' ? at + 1 : at
+    const quote = text[quoteAt] === '"' || text[quoteAt] === "'" ? (text[quoteAt] as string) : null
+    let start: number
+    let end: number
+    if (quote !== null) {
+      start = quoteAt + 1
+      const close = text.indexOf(quote, start)
+      end = close === -1 ? text.length : close
+      while (end > start && text[end - 1] === '\\') end -= 1
+    } else {
+      start = at
+      end = at
+      while (end < text.length && !/[\s&"',})\]]/.test(text[end] as string)) end += 1
+    }
+    const value = text.slice(start, end)
+    if (value === '' || value === MARK) continue
+    out += text.slice(last, start) + swap()
+    last = end
+    finder.lastIndex = Math.max(finder.lastIndex, end)
+  }
+  return out + text.slice(last)
 }
 
 interface Redactor {
   count: number
+  /** Names that had nothing left once the characters that hide were taken out. */
+  unnamed: number
   example(name: string, value: string): string | undefined
   raw(text: string): string | undefined
-  /** A name taken from the input (a JSON key, a parameter): one that is itself a token, as in a map keyed by tokens, becomes <key>. */
+  /**
+   * A name taken from the input (a JSON key, a parameter, a header): clean, short enough for the tab, and, if it is itself
+   * a token, as in a map keyed by tokens, `<key>`. Empty when nothing usable is left.
+   */
   name(name: string): string
 }
 
 function makeRedactor(mode: RedactMode): Redactor {
+  const names = new Map<string, string>()
   const redactor: Redactor = {
     count: 0,
+    unnamed: 0,
     example(name, value) {
       if (mode === 'all-examples' || value === '') return undefined
-      let shown = value
-      if (mode === 'secrets') {
-        if (secretName(name) || looksLikeSecret(value)) {
-          redactor.count += 1
-          return MARK
-        }
-        // A secret inside a longer text (a comment, an address in a value) is found by its shape and taken out of it.
-        const scrubbed = scrubText(value.slice(0, 2_000))
-        redactor.count += scrubbed.count
-        shown = scrubbed.text
+      const whole = clean(value.slice(0, 4_096))
+      if (whole === '') return undefined
+      if (secretName(name) || looksLikeSecret(whole)) {
+        redactor.count += 1
+        return MARK
       }
-      return shown.length > EXAMPLE_CHARS ? `${shown.slice(0, EXAMPLE_CHARS - 3)}...` : shown
+      // A secret inside a longer text (a comment, an address in a value) is found by its shape and taken out of it.
+      const scrubbed = scrubText(whole.slice(0, 200))
+      redactor.count += scrubbed.count
+      return scrubbed.text.length > EXAMPLE_CHARS ? `${cutUnits(scrubbed.text, EXAMPLE_CHARS - 3)}...` : scrubbed.text
     },
     name(name) {
-      if (!(looksLikeSecret(name) || scrubText(name.slice(0, 300)).count > 0)) return name
-      redactor.count += 1
-      return '<key>'
+      const known = names.get(name)
+      if (known !== undefined) return known
+      const cleaned = cutUnits(clean(name.slice(0, 1_000)), LIMITS.nameChars)
+      let shown = cleaned
+      if (cleaned === '') redactor.unnamed += 1
+      else if (looksLikeSecret(cleaned) || scrubText(cleaned).count > 0) {
+        redactor.count += 1
+        shown = '<key>'
+      }
+      if (names.size < 10_000) names.set(name, shown)
+      return shown
     },
     raw(text) {
       if (mode === 'all-examples' || text === '') return undefined
-      let out = text.slice(0, 2_000)
-      if (mode === 'secrets') {
-        const scrubbed = scrubText(out)
-        redactor.count += scrubbed.count
-        out = scrubbed.text
-      }
-      return out.length > 200 ? `${out.slice(0, 197)}...` : out
+      const scrubbed = scrubText(clean(text.slice(0, 600)).slice(0, 400))
+      redactor.count += scrubbed.count
+      return scrubbed.text === '' ? undefined : scrubbed.text.length > 200 ? `${cutUnits(scrubbed.text, 197)}...` : scrubbed.text
     },
   }
   return redactor
@@ -254,7 +363,13 @@ export function parseHar(text: string): Parsed | ParseError {
     if (content && typeof content.text === 'string' && content.text !== '') {
       const mime = typeof content.mimeType === 'string' ? content.mimeType : ''
       let bodyText = content.text
-      if (content.encoding === 'base64') bodyText = /json|xml|text/i.test(mime) && bodyText.length <= LIMITS.trafficBodyChars * 1.4 ? fromBase64(bodyText) : ''
+      if (content.encoding === 'base64') {
+        if (!/json|xml|text/i.test(mime)) bodyText = ''
+        else if (bodyText.length > LIMITS.trafficBodyChars * 1.4) {
+          tooLong += 1
+          bodyText = ''
+        } else bodyText = fromBase64(bodyText)
+      }
       if (bodyText.length > LIMITS.trafficBodyChars) tooLong += 1
       else if (bodyText !== '') responseBody = { mime, text: bodyText }
     }
@@ -266,7 +381,6 @@ export function parseHar(text: string): Parsed | ParseError {
       requestBody,
       requestForm,
       status: typeof response.status === 'number' ? response.status : null,
-      statusText: typeof response.statusText === 'string' ? response.statusText.slice(0, 100) : '',
       responseBody,
       resourceType: typeof (raw as Record<string, unknown>)._resourceType === 'string' ? ((raw as Record<string, unknown>)._resourceType as string).toLowerCase() : null,
     })
@@ -281,7 +395,15 @@ export function parseHar(text: string): Parsed | ParseError {
 // curl
 // ---------------------------------------------------------------------------
 
-/** Words of a shell command line, with `null` between commands. Nothing is expanded or run: `$HOME` and `$(x)` stay as they were written. */
+/** Plain text up to the next character that means something to a shell. `$` and `#` inside a word are taken one at a time. */
+const PLAIN_RUN = /[^ \t\r\n\\'"$;|&<>#]+/y
+const DOUBLE_RUN = /[^"\\]+/y
+const ANSI_RUN = /[^'\\]+/y
+
+/**
+ * Words of a shell command line, with `null` between commands. Nothing is expanded or run: `$HOME` and `$(x)` stay as they
+ * were written. A word is built from slices of the input, not letter by letter, because the input may be megabytes of one word.
+ */
 function tokenize(input: string): Array<string | null> {
   const tokens: Array<string | null> = []
   let word: string | null = null
@@ -325,11 +447,20 @@ function tokenize(input: string): Array<string | null> {
       let at = index + 1
       let text = ''
       while (at < input.length && input[at] !== '"') {
-        if (input[at] === '\\' && '"\\$`\n'.includes(input[at + 1] ?? '\0')) {
-          if (input[at + 1] !== '\n') text += input[at + 1]
+        DOUBLE_RUN.lastIndex = at
+        const run = DOUBLE_RUN.exec(input)
+        if (run) {
+          text += run[0]
+          at += run[0].length
+          continue
+        }
+        // A backslash: it only escapes a few characters inside double quotes, and is itself otherwise.
+        const next = input[at + 1] ?? ''
+        if (next !== '' && '"\\$`\n'.includes(next)) {
+          if (next !== '\n') text += next
           at += 2
         } else {
-          text += input[at]
+          text += '\\'
           at += 1
         }
       }
@@ -339,9 +470,11 @@ function tokenize(input: string): Array<string | null> {
       let at = index + 2
       let text = ''
       while (at < input.length && input[at] !== "'") {
-        if (input[at] !== '\\') {
-          text += input[at]
-          at += 1
+        ANSI_RUN.lastIndex = at
+        const run = ANSI_RUN.exec(input)
+        if (run) {
+          text += run[0]
+          at += run[0].length
           continue
         }
         const next = input[at + 1] ?? ''
@@ -379,8 +512,10 @@ function tokenize(input: string): Array<string | null> {
       const newline = input.indexOf('\n', index)
       index = newline === -1 ? input.length : newline
     } else {
-      add(char)
-      index += 1
+      PLAIN_RUN.lastIndex = index
+      const run = PLAIN_RUN.exec(input)
+      add(run ? run[0] : char)
+      index += run ? run[0].length : 1
     }
   }
   end()
@@ -399,7 +534,8 @@ function addressOf(candidate: string): string | null {
   return /^(?:localhost|[\w-]+(?:\.[\w-]+)+)(?::\d+)?(?:[/?#]|$)/i.test(candidate) ? `http://${candidate}` : null
 }
 
-const encode = (text: string): string => encodeURIComponent(text)
+/** Percent-encoding that does not throw on half of a surrogate pair, which a `$'\ud800'` in a command can produce. */
+const encode = (text: string): string => encodeURIComponent(text.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd'))
 
 function curlCommand(words: string[], notes: string[]): TrafficEntry | null {
   let method: string | null = null
@@ -515,7 +651,8 @@ function curlCommand(words: string[], notes: string[]): TrafficEntry | null {
     const declared = headers.find(([name]) => name.toLowerCase() === 'content-type')?.[1]
     const sniffed = /^\s*[{[]/.test(bodyText) ? 'application/json' : 'application/x-www-form-urlencoded'
     const mime = declared ?? (json ? 'application/json' : sniffed)
-    requestBody = { mime: mime, text: bodyText.slice(0, LIMITS.trafficBodyChars) }
+    if (bodyText.length > LIMITS.trafficBodyChars) notes.push(`A curl command's data was longer than ${LIMITS.trafficBodyChars.toLocaleString('en-US')} characters and was left out.`)
+    else requestBody = { mime, text: bodyText }
   }
   return {
     method: chosen,
@@ -524,14 +661,14 @@ function curlCommand(words: string[], notes: string[]): TrafficEntry | null {
     requestBody,
     requestForm: form.length > 0 ? form : null,
     status: null,
-    statusText: '',
     responseBody: null,
     resourceType: null,
   }
 }
 
 export function parseCurl(text: string): Parsed | ParseError {
-  const tokens = tokenize(text.slice(0, LIMITS.trafficBytes))
+  if (text.length > LIMITS.curlBytes) return { error: `That is more curl text than the connector reads (${LIMITS.curlBytes.toLocaleString('en-US')} characters). Give fewer commands.` }
+  const tokens = tokenize(text)
   const entries: TrafficEntry[] = []
   const notes: string[] = []
   let ignored = 0
@@ -601,6 +738,12 @@ const HEX = /^[0-9a-f]{16,}$/i
 const OPAQUE = /^[A-Za-z0-9_-]{24,}$/
 const MIXED = /^(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{12,}$/
 
+/** A short code such as a1b2c3d4: eight or more letters and digits with at least three of each, which no word in a path has (longer ones are caught by the rules above). */
+function shortCode(text: string): boolean {
+  if (text.length < 8 || !/^[A-Za-z0-9_-]+$/.test(text)) return false
+  return (text.match(/\d/g)?.length ?? 0) >= 3 && (text.match(/[A-Za-z]/g)?.length ?? 0) >= 3
+}
+
 function isValue(segment: string): boolean {
   let text = segment
   try {
@@ -608,7 +751,7 @@ function isValue(segment: string): boolean {
   } catch {
     // keep it as written
   }
-  return NUMERIC.test(text) || UUID.test(text) || ULID.test(text) || HEX.test(text) || OPAQUE.test(text) || MIXED.test(text) || looksLikeSecret(text) || scrubText(text.slice(0, 500)).count > 0
+  return NUMERIC.test(text) || UUID.test(text) || ULID.test(text) || HEX.test(text) || OPAQUE.test(text) || MIXED.test(text) || shortCode(text) || looksLikeSecret(text) || scrubText(text.slice(0, 500)).count > 0
 }
 
 const words = (segment: string): string[] => segment.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
@@ -622,9 +765,10 @@ function singular(word: string): string {
 
 const camel = (parts: string[]): string => parts.map((part, index) => (index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1))).join('')
 
-/** `/users/42/orders/7` as `/users/{userId}/orders/{orderId}`, and how many parameters that made. */
-function templatePath(pathname: string): string {
-  const segments = pathname.split('/').filter(Boolean).slice(0, 40)
+/** `/users/42/orders/7` as `/users/{userId}/orders/{orderId}`; null for a path with more levels than are read (cutting it would be a different path). */
+function templatePath(pathname: string): string | null {
+  const segments = pathname.split('/').filter(Boolean)
+  if (segments.length > MAX_LEVELS) return null
   const used = new Map<string, number>()
   let previous: string | null = null
   const out = segments.map((segment) => {
@@ -719,9 +863,10 @@ function addValue(shape: Shape, value: unknown, depth: number, rename: (key: str
       return
     }
     const keys = Object.keys(value)
-    if (keys.length > MAX_ENDPOINT_FIELDS) shape.wide = true
-    for (const key of keys.slice(0, MAX_ENDPOINT_FIELDS)) {
+    if (keys.length > LEVEL_FIELDS) shape.wide = true
+    for (const key of keys.slice(0, LEVEL_FIELDS)) {
       const name = rename(key)
+      if (name === '') continue
       let child = shape.props.get(name)
       if (!child) {
         child = new Shape()
@@ -797,10 +942,10 @@ function fieldOf(name: string, shape: Shape, parentObjects: number, context: Con
 
 function fieldsOf(shape: Shape, context: Context): FieldInput[] {
   const out: FieldInput[] = []
-  if (shape.wide) context.notes.push(`${context.where}: there are more than ${MAX_ENDPOINT_FIELDS} fields at one level; the rest were left out.`)
+  if (shape.wide) context.notes.push(`${context.where}: there are more than ${LEVEL_FIELDS} fields at one level; the rest were left out.`)
   for (const [name, child] of shape.props) {
     if (context.fields.left <= 0) {
-      context.notes.push(`${context.where}: there are more than ${MAX_ENDPOINT_FIELDS} fields; the rest were left out.`)
+      context.notes.push(`${context.where}: there are more than ${ENDPOINT_FIELDS.toLocaleString('en-US')} fields in this endpoint; the rest were left out.`)
       break
     }
     out.push(fieldOf(name, child, shape.objects, context))
@@ -856,6 +1001,7 @@ function flatFields(samples: Array<Array<{ name: string; value: string; file?: b
     const inThisSample = new Set<string>()
     for (const pair of sample) {
       const shown = context.redactor.name(pair.name)
+      if (shown === '') continue
       const key = header ? shown.toLowerCase() : shown
       let slot = merged.get(key)
       if (!slot) {
@@ -872,7 +1018,10 @@ function flatFields(samples: Array<Array<{ name: string; value: string; file?: b
     }
   }
   const out: FieldInput[] = []
-  for (const slot of [...merged.values()].slice(0, MAX_ENDPOINT_FIELDS)) {
+  if (merged.size > LEVEL_FIELDS) context.notes.push(`${context.where}: there are more than ${LEVEL_FIELDS} ${header ? 'headers' : 'fields'} at one level; the rest were left out.`)
+  // Headers, the query and a form body are at most 200 fields each, so they never use up the endpoint's budget by themselves; they only count against it.
+  for (const slot of [...merged.values()].slice(0, LEVEL_FIELDS)) {
+    context.fields.left -= 1
     const field: FieldInput = { name: slot.name, type: 'string' }
     if (slot.file) field.type = 'file'
     else if (slot.kinds.size === 1 && !slot.kinds.has('string')) field.type = [...slot.kinds][0] as 'int' | 'number' | 'boolean'
@@ -904,6 +1053,10 @@ export interface BuildResult {
   host: string | null
   /** Every host that had API calls, busiest first. */
   hosts: string[]
+  /** The hosts that had API calls and were not used, busiest first, at most ten. */
+  otherHosts: string[]
+  /** How many more such hosts there were. */
+  moreHosts: number
   endpoints: EndpointInput[]
   commonHeaders: FieldInput[]
   notes: string[]
@@ -919,11 +1072,37 @@ interface Group {
 
 const STATUS_TEXT: Record<number, string> = { 200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content', 301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 409: 'Conflict', 422: 'Unprocessable Entity', 429: 'Too Many Requests', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable' }
 
+/** How many fields an endpoint holds, nested ones included, which is how the tab counts them against its limit for a call. */
+function weight(endpoint: EndpointInput): number {
+  const count = (fields: FieldInput[] | undefined): number => (fields ?? []).reduce((total, field) => total + 1 + count(field.children), 0)
+  return count(endpoint.headers) + count(endpoint.query) + count(endpoint.body?.fields) + (endpoint.responses ?? []).reduce((total, response) => total + count(response.fields), 0)
+}
+
+/** A host as it is shown: a label that is itself a token (a secret in a subdomain) is hidden. */
+function safeHost(host: string): string {
+  return cutUnits(
+    host
+      .split('.')
+      .map((label) => (looksLikeSecret(label) ? '<key>' : label))
+      .join('.'),
+    100,
+  )
+}
+
+/** A note as it is sent: one clean line of a length that cannot swamp the answer, whatever the recording put into it. */
+const noteText = (note: string): string => cutUnits(clean(note), MAX_NOTE_CHARS)
+
 export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): BuildResult {
   const redactor = makeRedactor(options.redact)
   const notes: string[] = []
-  const prepared: Prepared[] = []
+  const calls: Prepared[] = []
+  const maybes: Prepared[] = []
+  let longUrls = 0
   for (const entry of entries) {
+    if (entry.url.length > MAX_URL_CHARS) {
+      longUrls += 1
+      continue
+    }
     let url: URL
     try {
       url = new URL(entry.url)
@@ -931,28 +1110,52 @@ export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): 
       continue
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') continue
-    prepared.push({ entry, url, method: entry.method.toUpperCase() })
+    const item: Prepared = { entry, url, method: entry.method.toUpperCase() }
+    const kind = classify(item)
+    if (kind === 'yes') calls.push(item)
+    else if (kind === 'maybe') maybes.push(item)
   }
-  const calls = prepared.filter((item) => classify(item) === 'yes')
-  const maybes = prepared.filter((item) => classify(item) === 'maybe')
+  if (longUrls > 0) notes.push(`${plural(longUrls, 'request', 'requests')} had an address longer than ${MAX_URL_CHARS.toLocaleString('en-US')} characters and ${longUrls === 1 ? 'was' : 'were'} left out.`)
 
   const counts = new Map<string, number>()
-  for (const call of calls) counts.set(call.url.host.toLowerCase(), (counts.get(call.url.host.toLowerCase()) ?? 0) + 1)
+  for (const call of calls) {
+    const host = call.url.host.toLowerCase()
+    counts.set(host, (counts.get(host) ?? 0) + 1)
+  }
   const hosts = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([host]) => host)
 
   let chosen: string[]
   if (options.hosts && options.hosts.length > 0) {
     const wanted = options.hosts.map((host) => host.toLowerCase())
     chosen = hosts.filter((host) => wanted.includes(host) || wanted.includes(host.replace(/:\d+$/, '')))
-    if (chosen.length === 0) notes.push(`None of the hosts you named (${wanted.join(', ')}) has API calls in the recording. It has: ${hosts.join(', ') || 'none'}.`)
+    if (chosen.length === 0) notes.push(`None of the hosts you named (${wanted.join(', ')}) has API calls in the recording. It has: ${hosts.slice(0, 10).map(safeHost).join(', ') || 'none'}.`)
   } else chosen = hosts.slice(0, 1)
   const others = hosts.filter((host) => !chosen.includes(host))
-  if (others.length > 0 && chosen.length > 0) notes.push(`Other hosts in the recording were left out: ${others.map((host) => `${host} (${plural(counts.get(host) ?? 0, 'call', 'calls')})`).join(', ')}. Name them in hosts to include them.`)
+  const shownOthers = others.slice(0, 10)
+  if (others.length > 0 && chosen.length > 0) {
+    const more = others.length > shownOthers.length ? `, and ${others.length - shownOthers.length} more` : ''
+    notes.push(`Other hosts in the recording were left out: ${shownOthers.map((host) => `${safeHost(host)} (${plural(counts.get(host) ?? 0, 'call', 'calls')})`).join(', ')}${more}. Name them in hosts to include them.`)
+  }
 
+  // A path the tab would refuse, or that would have to be cut to fit, is a request left out and said so: never a different path.
+  let tooDeep = 0
+  let tooLong = 0
+  const routeOf = (item: Prepared, tell: boolean): string | null => {
+    const path = templatePath(item.url.pathname)
+    if (path === null || path.length > MAX_PATH_CHARS) {
+      if (tell) {
+        if (path === null) tooDeep += 1
+        else tooLong += 1
+      }
+      return null
+    }
+    return path
+  }
   const groups = new Map<string, Group>()
   for (const call of calls) {
     if (!chosen.includes(call.url.host.toLowerCase())) continue
-    const path = templatePath(call.url.pathname)
+    const path = routeOf(call, true)
+    if (path === null) continue
     const key = `${call.method} ${path}`
     let group = groups.get(key)
     if (!group) {
@@ -963,8 +1166,12 @@ export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): 
   }
   for (const maybe of maybes) {
     if (!chosen.includes(maybe.url.host.toLowerCase())) continue
-    groups.get(`${maybe.method} ${templatePath(maybe.url.pathname)}`)?.samples.push(maybe)
+    const path = routeOf(maybe, false)
+    if (path !== null) groups.get(`${maybe.method} ${path}`)?.samples.push(maybe)
   }
+  if (tooDeep > 0) notes.push(`${plural(tooDeep, 'request', 'requests')} had a path with more than ${MAX_LEVELS} levels and ${tooDeep === 1 ? 'was' : 'were'} left out.`)
+  if (tooLong > 0) notes.push(`${plural(tooLong, 'request', 'requests')} had a path longer than ${MAX_PATH_CHARS.toLocaleString('en-US')} characters and ${tooLong === 1 ? 'was' : 'were'} left out.`)
+
   let kept = [...groups.values()]
   if (kept.length > LIMITS.endpointsPerCall) {
     notes.push(`${plural(kept.length - LIMITS.endpointsPerCall, 'endpoint', 'endpoints')} did not fit in one call (the limit is ${LIMITS.endpointsPerCall}) and ${kept.length - LIMITS.endpointsPerCall === 1 ? 'was' : 'were'} left out, the least often called first.`)
@@ -972,13 +1179,13 @@ export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): 
   }
 
   const graphql = new Set<string>()
-  const endpoints: EndpointInput[] = kept.map((group) => {
+  let built = kept.map((group) => {
     const where = `${group.method} ${group.path}`
-    const context: Context = { where, redactor, notes, fields: { left: LIMITS.fieldsPerCall / 4 } }
+    const context: Context = { where, redactor, notes, fields: { left: ENDPOINT_FIELDS } }
     const samples = group.samples
     if (/graphql/i.test(group.path)) graphql.add(where)
     const endpoint: EndpointInput = {
-      name: nameOf(group.method, group.path),
+      name: cutUnits(clean(nameOf(group.method, group.path)), LIMITS.nameChars),
       method: group.method as Method,
       path: group.path,
       description: `Inferred from recorded traffic (${plural(samples.length, 'sample', 'samples')}): confirm.`,
@@ -1015,20 +1222,21 @@ export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): 
       }
     }
 
-    // the responses, by status
+    // the responses, by status; each is described by the standard text of its status and never by the text the recording carried
     const byStatus = new Map<number, Prepared[]>()
     for (const sample of samples) {
       const status = sample.entry.status
-      if (status === null || status < 100 || status > 599) continue
-      byStatus.set(status, [...(byStatus.get(status) ?? []), sample])
+      if (status === null || !Number.isInteger(status) || status < 100 || status > 599) continue
+      const list = byStatus.get(status)
+      if (list) list.push(sample)
+      else byStatus.set(status, [sample])
     }
     if (byStatus.size > 0) {
       endpoint.responses = [...byStatus.entries()]
         .sort((a, b) => a[0] - b[0])
         .slice(0, LIMITS.responsesPerEndpoint)
         .map(([status, list]) => {
-          const said = list.find((sample) => sample.entry.statusText)?.entry.statusText ?? ''
-          const text = (said ? redactor.raw(said) : undefined) || STATUS_TEXT[status] || ''
+          const text = STATUS_TEXT[status] ?? ''
           const response: ResponseInput = { status: String(status) }
           const bodiesOf = list.filter((sample) => sample.entry.responseBody && /json/i.test(sample.entry.responseBody.mime || 'json')).map((sample) => sample.entry.responseBody?.text ?? '')
           const found = bodiesOf.length > 0 ? jsonFields(bodiesOf, { ...context, where: `${where} (${status})` }) : null
@@ -1038,10 +1246,26 @@ export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): 
           return response
         })
     }
-    return endpoint
+    return { group, endpoint }
   })
 
+  // One call to the tab holds so many fields and no more: if the recording has more, the endpoints that were called least are left out.
+  let total = built.reduce((sum, item) => sum + weight(item.endpoint), 0)
+  if (total > LIMITS.fieldsPerCall) {
+    const order = built.map((_, index) => index).sort((a, b) => (built[a]?.group.samples.length ?? 0) - (built[b]?.group.samples.length ?? 0) || (built[b]?.group.order ?? 0) - (built[a]?.group.order ?? 0))
+    const dropped = new Set<number>()
+    for (const index of order) {
+      if (total <= LIMITS.fieldsPerCall) break
+      total -= weight((built[index] as (typeof built)[number]).endpoint)
+      dropped.add(index)
+    }
+    notes.push(`${plural(dropped.size, 'endpoint', 'endpoints')} ${dropped.size === 1 ? 'was' : 'were'} left out because one call to Pico holds at most ${LIMITS.fieldsPerCall.toLocaleString('en-US')} fields; the least often called went first.`)
+    built = built.filter((_, index) => !dropped.has(index))
+  }
+  const endpoints = built.map((item) => item.endpoint)
+
   for (const where of graphql) notes.push(`${where} looks like GraphQL: every operation goes through this one endpoint, so its fields are a mix. Review it.`)
+  if (redactor.unnamed > 0) notes.push(`${plural(redactor.unnamed, 'name', 'names')} had nothing left once the characters that hide were taken out, so ${redactor.unnamed === 1 ? 'that field was' : 'those fields were'} left out.`)
 
   // headers that every endpoint has can live in the project's common headers instead
   const commonHeaders: FieldInput[] = []
@@ -1061,13 +1285,15 @@ export function buildEndpoints(entries: TrafficEntry[], options: BuildOptions): 
     }
   }
 
-  const used = kept.reduce((total, group) => total + group.samples.length, 0)
+  const used = built.reduce((sum, item) => sum + item.group.samples.length, 0)
   return {
-    host: chosen[0] ?? null,
-    hosts,
+    host: chosen[0] === undefined ? null : safeHost(chosen[0]),
+    hosts: hosts.map(safeHost),
+    otherHosts: shownOthers.map(safeHost),
+    moreHosts: others.length - shownOthers.length,
     endpoints,
     commonHeaders,
-    notes: [...new Set(notes)].slice(0, 60),
+    notes: [...new Set(notes.map(noteText))].slice(0, 60),
     stats: { entries: entries.length, used, skipped: entries.length - used, endpoints: endpoints.length, redactions: redactor.count },
   }
 }

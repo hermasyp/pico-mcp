@@ -155,7 +155,9 @@ expected to work. Safari does not allow a secure page to open `ws://127.0.0.1`, 
   Undo message takes the whole burst back, exactly or not at all.
 - **Nothing runs.** The tools read and edit a contract. They do not execute requests or open connections.
   The connector reads a file only if you started it with `--root <folder>`, and then only a picture or a recording
-  inside that folder that the agent names; what it reads goes to the Pico tab and nowhere else.
+  inside that folder that the agent names. It sends what it reads to the Pico tab and nowhere else, but an agent
+  can read an imported recording back as endpoints, so tokens, keys and passwords in it are hidden (a rule of
+  thumb, not a promise; see the reference), and names and other personal details are not.
 
 The details, the limits and what this does **not** protect against are in
 [docs/REFERENCE.md](docs/REFERENCE.md#security). To report a vulnerability, see [SECURITY.md](SECURITY.md).

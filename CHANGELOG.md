@@ -28,10 +28,11 @@ connector tells the agent to ask for a reload); `pico_import_har` works with any
 - **`pico_attach_image`** puts a PNG, JPEG, GIF or WebP picture (up to 3,000,000 bytes) into an endpoint's description.
   The connector reads the picture and sends its bytes to the tab inside the call; the agent is told only the name, type,
   size and pixels, and never receives the bytes.
-- The tool list is 18 tools and 26,552 characters (it was 16 and 24,058; the ceiling is now 27,000). The server
+- The tool list is 18 tools and 26,554 characters (it was 16 and 24,058; the ceiling is now 27,000). The server
   instructions and the format guide say when to use the two tools and that they need `--root`.
 - New limits: pictures up to 3,000,000 bytes, 16,384 pixels on a side and 40,000,000 pixels in all; a recording up to
-  25,000,000 bytes and 20,000 entries, with a body over 1,000,000 characters left out.
+  25,000,000 bytes and 20,000 entries (curl text up to 2,000,000 bytes), with a body over 1,000,000 characters left
+  out and a note that says so.
 - **Codex and OpenCode.** The README has the settings for both, and the reference has a new part, *Using it with
   each agent*, on what each one does differently: the names it gives the tools, the environment it starts the
   connector with, and how long it waits for a tool. The real Codex CLI (0.163.0) and OpenCode (1.19.2) started
